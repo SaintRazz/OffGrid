@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>OffGrid Simulation Mockup</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+    <script src="{{ url_for('static', filename='script.js') }}" defer></script>
+  </head>
+  <body>
+    <div class="game-shell">
+      <header class="topbar">
+        <div class="stat"><span class="label">Money</span><strong>$7,423</strong></div>
+        <div class="stat"><span class="label">Power</span><strong>Water</strong></div>
+        <div class="stat"><span class="label">Water</span><strong>Food</strong></div>
+        <div class="stat"><span class="label">Food</span><strong>Waste</strong></div>
+      </header>
+
+      <div class="main-layout">
+        <aside class="panel side-panel left-panel">
+          <div class="panel-block">
+            <h3>Household</h3>
+            <ul>
+              <li>Occupants: 4</li>
+              <li>Power demand: 24 kWh/day</li>
+              <li>Water use: 220 gal/day</li>
+              <li>Waste output: 3.6 kg/day</li>
+            </ul>
+          </div>
+
+          <div class="panel-block">
+            <h3>Consumption</h3>
+            <ul>
+              <li>Appliances</li>
+              <li>HVAC</li>
+              <li>Cooking</li>
+              <li>Hot water</li>
+            </ul>
+          </div>
+
+          <div class="panel-block">
+            <h3>Waste + Water</h3>
+            <ul>
+              <li>Greywater</li>
+              <li>Compost</li>
+              <li>Rain capture</li>
+              <li>Septic</li>
+            </ul>
+          </div>
+        </aside>
+
+        <main class="map-panel panel">
+          <div class="map-header">
+            <span>Canvas</span>
+            <span>Property Map</span>
+          </div>
+          <div id="land-grid" class="land-grid" aria-label="Property map"></div>
+        </main>
+
+        <aside class="panel side-panel right-panel">
+          <div class="panel-block">
+            <h3>Facilities</h3>
+            <ul class="facility-list">
+              <li>Panel</li>
+              <li>Compost</li>
+              <li>Bin</li>
+              <li>Greenhouse</li>
+              <li>Water tank</li>
+              <li>Tool shed</li>
+            </ul>
+          </div>
+
+          <div class="panel-block">
+            <h3>Build</h3>
+            <ul>
+              <li>Solar array</li>
+              <li>Rain barrel</li>
+              <li>Garden beds</li>
+              <li>Workshop</li>
+            </ul>
+          </div>
+        </aside>
+      </div>
+
+      <footer class="bottom-bar panel">
+        <div class="bottom-item"><span>Build</span></div>
+        <div class="bottom-item"><span>Resources</span></div>
+        <div class="bottom-item"><span>Goals</span></div>
+        <div class="bottom-item"><span>Statistics</span></div>
+      </footer>
+    </div>
+  </body>
+</html>
