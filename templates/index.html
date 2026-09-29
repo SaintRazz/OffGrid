@@ -51,33 +51,46 @@
 
         <main class="map-panel panel">
           <div class="map-header">
-            <span>Canvas</span>
             <span>Property Map</span>
+            <span>42 × 42 tiles · 5 ft per tile</span>
           </div>
-          <div id="land-grid" class="land-grid" aria-label="Property map"></div>
+          <div id="land-grid" class="land-grid" role="grid" aria-label="Property map"></div>
+          <p id="placement-status" class="placement-status" aria-live="polite">Select a structure, then click an open tile to place it.</p>
         </main>
 
         <aside class="panel side-panel right-panel">
           <div class="panel-block">
-            <h3>Facilities</h3>
-            <ul class="facility-list">
-              <li>Panel</li>
-              <li>Compost</li>
-              <li>Bin</li>
-              <li>Greenhouse</li>
-              <li>Water tank</li>
-              <li>Tool shed</li>
-            </ul>
-          </div>
-
-          <div class="panel-block">
             <h3>Build</h3>
-            <ul>
-              <li>Solar array</li>
-              <li>Rain barrel</li>
-              <li>Garden beds</li>
-              <li>Workshop</li>
-            </ul>
+            <div class="build-list" aria-label="Structures">
+              <button class="build-option" type="button" data-building="chicken-coop" aria-pressed="false">
+                <img src="{{ url_for('static', filename='assets/sprites/ChickenCoop.png') }}" alt="">
+                <span><strong>Chicken coop</strong><small>20 × 15 ft</small></span>
+              </button>
+              <button class="build-option" type="button" data-building="solar-array" aria-pressed="false">
+                <img src="{{ url_for('static', filename='assets/sprites/ElectroSolar.png') }}" alt="">
+                <span><strong>Solar array</strong><small>20 × 15 ft</small></span>
+              </button>
+              <button class="build-option" type="button" data-building="garden-plot" aria-pressed="false">
+                <img src="{{ url_for('static', filename='assets/sprites/InGroundPlot.png') }}" alt="">
+                <span><strong>Garden plot</strong><small>20 × 10 ft</small></span>
+              </button>
+              <button class="build-option" type="button" data-building="bsfl-reactor" aria-pressed="false">
+                <img src="{{ url_for('static', filename='assets/sprites/BSFLReactor.png') }}" alt="">
+                <span><strong>BSFL reactor</strong><small>10 × 10 ft</small></span>
+              </button>
+              <button class="build-option" type="button" data-building="compost-pile" aria-pressed="false">
+                <img src="{{ url_for('static', filename='assets/sprites/CompostPile.png') }}" alt="">
+                <span><strong>Compost pile</strong><small>10 × 10 ft</small></span>
+              </button>
+              <button class="build-option" type="button" data-building="rain-barrel" aria-pressed="false">
+                <img src="{{ url_for('static', filename='assets/sprites/RainBarrel.png') }}" alt="">
+                <span><strong>Rain barrel</strong><small>5 × 5 ft</small></span>
+              </button>
+            </div>
+            <div class="build-controls">
+              <button id="rotate-building" class="control-button" type="button" disabled>Rotate 90°</button>
+              <button id="cancel-building" class="control-button" type="button" disabled>Cancel</button>
+            </div>
           </div>
         </aside>
       </div>
