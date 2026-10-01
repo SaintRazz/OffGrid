@@ -1,0 +1,65 @@
+{
+  "facilities": [
+    {
+      "id": "chicken-coop",
+      "name": "Chicken coop",
+      "image": "ChickenCoop.png",
+      "width": 4,
+      "height": 3,
+      "inputs": {"feed": 0.25, "water": 2, "electricity": 0.1},
+      "outputs": {"eggs": 0.25, "organic_waste": 0.1},
+      "labor_hours": 0.15
+    },
+    {
+      "id": "solar-array",
+      "name": "Solar array",
+      "image": "ElectroSolar.png",
+      "width": 4,
+      "height": 3,
+      "inputs": {},
+      "outputs": {"electricity": 0.8},
+      "labor_hours": 0.01,
+      "production_window": {"start_hour": 6, "peak_hour": 12, "end_hour": 18}
+    },
+    {
+      "id": "garden-plot",
+      "name": "Garden plot",
+      "image": "InGroundPlot.png",
+      "width": 4,
+      "height": 2,
+      "inputs": {"water": 4, "electricity": 0.05},
+      "outputs": {"produce": 0.4},
+      "labor_hours": 0.25
+    },
+    {
+      "id": "bsfl-reactor",
+      "name": "BSFL reactor",
+      "image": "BSFLReactor.png",
+      "width": 2,
+      "height": 2,
+      "inputs": {"organic_waste": 0.5, "water": 0.2, "electricity": 0.1},
+      "outputs": {"bsfl_biomass": 0.2, "compost": 0.1},
+      "labor_hours": 0.1
+    },
+    {
+      "id": "compost-pile",
+      "name": "Compost pile",
+      "image": "CompostPile.png",
+      "width": 2,
+      "height": 2,
+      "inputs": {"organic_waste": 0.35, "water": 0.1},
+      "outputs": {"compost": 0.3},
+      "labor_hours": 0.1
+    },
+    {
+      "id": "rain-barrel",
+      "name": "Rain barrel",
+      "image": "RainBarrel.png",
+      "width": 1,
+      "height": 1,
+      "inputs": {},
+      "outputs": {"water": 0.15},
+      "labor_hours": 0.01
+    }
+  ]
+}

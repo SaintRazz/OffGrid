@@ -1,0 +1,14 @@
+{
+  "starting_at": "2026-04-01T08:00:00",
+  "labor_hours_per_tick": 2.0,
+  "resources": {
+    "electricity": {"name": "Electricity", "unit": "kWh", "initial_stock": 24, "capacity": 100},
+    "water": {"name": "Water", "unit": "gal", "initial_stock": 500, "capacity": 1000},
+    "feed": {"name": "Feed", "unit": "kg", "initial_stock": 20, "capacity": 200},
+    "eggs": {"name": "Eggs", "unit": "count", "initial_stock": 0, "capacity": 500},
+    "organic_waste": {"name": "Organic waste", "unit": "kg", "initial_stock": 10, "capacity": 500},
+    "produce": {"name": "Produce", "unit": "kg", "initial_stock": 0, "capacity": 500},
+    "bsfl_biomass": {"name": "BSFL biomass", "unit": "kg", "initial_stock": 0, "capacity": 500},
+    "compost": {"name": "Compost", "unit": "kg", "initial_stock": 0, "capacity": 500}
+  }
+}

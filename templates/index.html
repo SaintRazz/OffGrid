@@ -10,10 +10,11 @@
   <body>
     <div class="game-shell">
       <header class="topbar">
-        <div class="stat"><span class="label">Money</span><strong>$7,423</strong></div>
-        <div class="stat"><span class="label">Power</span><strong>Water</strong></div>
-        <div class="stat"><span class="label">Water</span><strong>Food</strong></div>
-        <div class="stat"><span class="label">Food</span><strong>Waste</strong></div>
+        <div class="stat"><span class="label">Calendar</span><strong id="simulation-date">Loading</strong></div>
+        <div class="stat"><span class="label">Clock</span><strong id="simulation-clock">--:--</strong></div>
+        <div class="stat"><span class="label">Electricity</span><strong id="stat-electricity">--</strong></div>
+        <div class="stat"><span class="label">Water</span><strong id="stat-water">--</strong></div>
+        <div class="stat"><span class="label">Produce</span><strong id="stat-produce">--</strong></div>
       </header>
 
       <div class="main-layout">
@@ -47,12 +48,23 @@
               <li>Septic</li>
             </ul>
           </div>
+          <div class="panel-block">
+            <h3>Resources</h3>
+            <ul id="resource-list" aria-live="polite"></ul>
+          </div>
+          <div class="panel-block">
+            <h3>Operations</h3>
+            <ul id="facility-status-list" aria-live="polite">
+              <li>No facilities placed.</li>
+            </ul>
+          </div>
         </aside>
 
         <main class="map-panel panel">
           <div class="map-header">
             <span>Property Map</span>
             <span>42 × 42 tiles · 5 ft per tile</span>
+            <button id="advance-tick" class="control-button" type="button">Advance 1 hour</button>
           </div>
           <div id="land-grid" class="land-grid" role="grid" aria-label="Property map"></div>
           <p id="placement-status" class="placement-status" aria-live="polite">Select a structure, then click an open tile to place it.</p>
@@ -61,32 +73,7 @@
         <aside class="panel side-panel right-panel">
           <div class="panel-block">
             <h3>Build</h3>
-            <div class="build-list" aria-label="Structures">
-              <button class="build-option" type="button" data-building="chicken-coop" aria-pressed="false">
-                <img src="{{ url_for('static', filename='assets/sprites/ChickenCoop.png') }}" alt="">
-                <span><strong>Chicken coop</strong><small>20 × 15 ft</small></span>
-              </button>
-              <button class="build-option" type="button" data-building="solar-array" aria-pressed="false">
-                <img src="{{ url_for('static', filename='assets/sprites/ElectroSolar.png') }}" alt="">
-                <span><strong>Solar array</strong><small>20 × 15 ft</small></span>
-              </button>
-              <button class="build-option" type="button" data-building="garden-plot" aria-pressed="false">
-                <img src="{{ url_for('static', filename='assets/sprites/InGroundPlot.png') }}" alt="">
-                <span><strong>Garden plot</strong><small>20 × 10 ft</small></span>
-              </button>
-              <button class="build-option" type="button" data-building="bsfl-reactor" aria-pressed="false">
-                <img src="{{ url_for('static', filename='assets/sprites/BSFLReactor.png') }}" alt="">
-                <span><strong>BSFL reactor</strong><small>10 × 10 ft</small></span>
-              </button>
-              <button class="build-option" type="button" data-building="compost-pile" aria-pressed="false">
-                <img src="{{ url_for('static', filename='assets/sprites/CompostPile.png') }}" alt="">
-                <span><strong>Compost pile</strong><small>10 × 10 ft</small></span>
-              </button>
-              <button class="build-option" type="button" data-building="rain-barrel" aria-pressed="false">
-                <img src="{{ url_for('static', filename='assets/sprites/RainBarrel.png') }}" alt="">
-                <span><strong>Rain barrel</strong><small>5 × 5 ft</small></span>
-              </button>
-            </div>
+            <div id="build-list" class="build-list" aria-label="Structures"></div>
             <div class="build-controls">
               <button id="rotate-building" class="control-button" type="button" disabled>Rotate 90°</button>
               <button id="cancel-building" class="control-button" type="button" disabled>Cancel</button>

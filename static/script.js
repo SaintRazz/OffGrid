@@ -4,23 +4,18 @@ const landGrid = document.getElementById("land-grid");
 
 if (landGrid) {
   const gridSize = 42;
-  const buildings = {
-    "chicken-coop": { name: "Chicken coop", image: "ChickenCoop.png", width: 4, height: 3 },
-    "solar-array": { name: "Solar array", image: "ElectroSolar.png", width: 4, height: 3 },
-    "garden-plot": { name: "Garden plot", image: "InGroundPlot.png", width: 4, height: 2 },
-    "bsfl-reactor": { name: "BSFL reactor", image: "BSFLReactor.png", width: 2, height: 2 },
-    "compost-pile": { name: "Compost pile", image: "CompostPile.png", width: 2, height: 2 },
-    "rain-barrel": { name: "Rain barrel", image: "RainBarrel.png", width: 1, height: 1 },
-  };
   const placements = [];
-  const buildOptions = document.querySelectorAll(".build-option");
+  const buildList = document.getElementById("build-list");
   const rotateButton = document.getElementById("rotate-building");
   const cancelButton = document.getElementById("cancel-building");
+  const tickButton = document.getElementById("advance-tick");
   const status = document.getElementById("placement-status");
+  const definitionsById = new Map();
   let selectedId = null;
   let rotated = false;
   let hoverPosition = null;
   let preview = null;
+  let simulationState = null;
 
   for (let row = 0; row < gridSize; row += 1) {
     for (let column = 0; column < gridSize; column += 1) {
@@ -37,7 +32,7 @@ if (landGrid) {
   }
 
   function footprint() {
-    const building = buildings[selectedId];
+    const building = definitionsById.get(selectedId);
     if (!building) return null;
     return rotated
       ? { ...building, width: building.height, height: building.width }
@@ -75,11 +70,133 @@ if (landGrid) {
     landGrid.appendChild(preview);
   }
 
-  buildOptions.forEach((button) => {
+  function formatAmount(amount) {
+    return new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 }).format(amount);
+  }
+
+  function setDateAndClock(value) {
+    const date = new Date(value);
+    document.getElementById("simulation-date").textContent = new Intl.DateTimeFormat(undefined, {
+      year: "numeric", month: "short", day: "numeric",
+    }).format(date);
+    document.getElementById("simulation-clock").textContent = new Intl.DateTimeFormat(undefined, {
+      hour: "numeric", minute: "2-digit",
+    }).format(date);
+  }
+
+  function renderResources() {
+    const resourceList = document.getElementById("resource-list");
+    resourceList.replaceChildren();
+    Object.entries(simulationState.resources).forEach(([resourceId, resource]) => {
+      const item = document.createElement("li");
+      item.textContent = `${resource.name}: ${formatAmount(resource.amount)} ${resource.unit}`;
+      resourceList.appendChild(item);
+    });
+
+    ["electricity", "water", "produce"].forEach((resourceId) => {
+      const resource = simulationState.resources[resourceId];
+      document.getElementById(`stat-${resourceId}`).textContent =
+        `${formatAmount(resource.amount)} ${resource.unit}`;
+    });
+  }
+
+  function formatFlows(flows) {
+    return Object.entries(flows).map(([resourceId, amount]) => {
+      const resource = simulationState.resources[resourceId];
+      return `${formatAmount(amount)} ${resource.unit} ${resource.name.toLowerCase()}`;
+    }).join(", ");
+  }
+
+  function renderOperations() {
+    const list = document.getElementById("facility-status-list");
+    list.replaceChildren();
+    if (simulationState.instances.length === 0) {
+      const item = document.createElement("li");
+      item.textContent = "No facilities placed.";
+      list.appendChild(item);
+      return;
+    }
+
+    simulationState.instances.forEach((instance) => {
+      const definition = definitionsById.get(instance.facility_id);
+      const item = document.createElement("li");
+      const operation = instance.last_operation;
+      const heading = document.createElement("strong");
+      heading.textContent = `${definition.name} · ${instance.instance_id}`;
+      item.appendChild(heading);
+
+      const detail = document.createElement("span");
+      if (!operation) {
+        detail.textContent = `Tile ${instance.row + 1}, ${instance.column + 1} · awaiting first tick`;
+      } else {
+        const flows = [];
+        if (Object.keys(operation.consumed).length) flows.push(`used ${formatFlows(operation.consumed)}`);
+        if (Object.keys(operation.produced).length) flows.push(`made ${formatFlows(operation.produced)}`);
+        const statusText = operation.status === "operating"
+          ? `Operating ${operation.utilization_pct}%`
+          : `Idle: ${operation.reason}`;
+        detail.textContent = `Tile ${instance.row + 1}, ${instance.column + 1} · ${statusText} · ${formatAmount(operation.labor_used)} labor h${flows.length ? ` · ${flows.join("; ")}` : ""}`;
+      }
+      item.appendChild(detail);
+      list.appendChild(item);
+    });
+  }
+
+  function renderInstance(instance) {
+    const definition = definitionsById.get(instance.facility_id);
+    const sprite = document.createElement("img");
+    sprite.className = "building-sprite placed-building";
+    sprite.src = `/static/assets/sprites/${definition.image}`;
+    sprite.alt = `${definition.name}, ${instance.width * 5} by ${instance.height * 5} feet`;
+    sprite.title = `${definition.name} · ${instance.width * 5} × ${instance.height * 5} ft`;
+    sprite.style.gridColumn = `${instance.column + 1} / span ${instance.width}`;
+    sprite.style.gridRow = `${instance.row + 1} / span ${instance.height}`;
+    landGrid.appendChild(sprite);
+    placements.push(instance);
+  }
+
+  function renderState() {
+    setDateAndClock(simulationState.current_time);
+    renderResources();
+    renderOperations();
+  }
+
+  async function requestJson(url, options = {}) {
+    const response = await fetch(url, options);
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || "Simulation request failed.");
+    return result;
+  }
+
+  function createBuildOptions(definitions) {
+    definitions.forEach((definition) => {
+      definitionsById.set(definition.id, definition);
+      const button = document.createElement("button");
+      button.className = "build-option";
+      button.type = "button";
+      button.dataset.building = definition.id;
+      button.setAttribute("aria-pressed", "false");
+
+      const image = document.createElement("img");
+      image.src = `/static/assets/sprites/${definition.image}`;
+      image.alt = "";
+      const label = document.createElement("span");
+      const name = document.createElement("strong");
+      name.textContent = definition.name;
+      const size = document.createElement("small");
+      size.textContent = `${definition.width * 5} × ${definition.height * 5} ft`;
+      label.append(name, size);
+      button.append(image, label);
+      buildList.appendChild(button);
+    });
+
+    buildList.querySelectorAll(".build-option").forEach((button) => {
     button.addEventListener("click", () => {
       selectedId = button.dataset.building;
       rotated = false;
-      buildOptions.forEach((option) => option.setAttribute("aria-pressed", String(option === button)));
+      buildList.querySelectorAll(".build-option").forEach((option) => {
+        option.setAttribute("aria-pressed", String(option === button));
+      });
       rotateButton.disabled = false;
       cancelButton.disabled = false;
       const building = footprint();
@@ -87,13 +204,26 @@ if (landGrid) {
       if (hoverPosition) showPreview(hoverPosition.column, hoverPosition.row);
     });
   });
+  }
+
+  async function loadSimulation() {
+    try {
+      simulationState = await requestJson("/api/simulation");
+      createBuildOptions(simulationState.facility_definitions);
+      simulationState.instances.forEach(renderInstance);
+      renderState();
+    } catch (error) {
+      status.textContent = error.message;
+      tickButton.disabled = true;
+    }
+  }
 
   landGrid.addEventListener("pointerover", (event) => {
     const cell = event.target.closest(".grid-cell");
     if (cell) showPreview(Number(cell.dataset.column), Number(cell.dataset.row));
   });
 
-  landGrid.addEventListener("click", (event) => {
+  landGrid.addEventListener("click", async (event) => {
     const cell = event.target.closest(".grid-cell");
     const building = footprint();
     if (!cell || !building) return;
@@ -105,17 +235,35 @@ if (landGrid) {
       return;
     }
 
-    const sprite = document.createElement("img");
-    sprite.className = "building-sprite placed-building";
-    sprite.src = `/static/assets/sprites/${building.image}`;
-    sprite.alt = `${building.name}, ${building.width * 5} by ${building.height * 5} feet`;
-    sprite.title = `${building.name} · ${building.width * 5} × ${building.height * 5} ft`;
-    sprite.style.gridColumn = `${column + 1} / span ${building.width}`;
-    sprite.style.gridRow = `${row + 1} / span ${building.height}`;
-    landGrid.appendChild(sprite);
-    placements.push({ column, row, width: building.width, height: building.height });
-    status.textContent = `${building.name} placed at tile ${row + 1}, ${column + 1}.`;
-    showPreview(column, row);
+    try {
+      const instance = await requestJson("/api/facilities", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ facility_id: selectedId, column, row, rotated }),
+      });
+      simulationState.instances.push(instance);
+      renderInstance(instance);
+      renderOperations();
+      status.textContent = `${building.name} placed at tile ${row + 1}, ${column + 1}.`;
+      showPreview(column, row);
+    } catch (error) {
+      status.textContent = error.message;
+    }
+  });
+
+  tickButton.addEventListener("click", async () => {
+    tickButton.disabled = true;
+    try {
+      const result = await requestJson("/api/tick", { method: "POST" });
+      simulationState = result.state;
+      renderState();
+      const operating = result.operations.filter((operation) => operation.status === "operating").length;
+      status.textContent = `Hour processed: ${new Date(result.processed_at).toLocaleString()}. ${operating} of ${result.operations.length} facilities operating.`;
+    } catch (error) {
+      status.textContent = error.message;
+    } finally {
+      tickButton.disabled = false;
+    }
   });
 
   rotateButton.addEventListener("click", () => {
@@ -130,7 +278,7 @@ if (landGrid) {
     selectedId = null;
     rotated = false;
     removePreview();
-    buildOptions.forEach((button) => button.setAttribute("aria-pressed", "false"));
+    buildList.querySelectorAll(".build-option").forEach((button) => button.setAttribute("aria-pressed", "false"));
     rotateButton.disabled = true;
     cancelButton.disabled = true;
     status.textContent = "Select a structure, then click an open tile to place it.";
@@ -141,5 +289,7 @@ if (landGrid) {
     if (event.key === "Escape") cancelPlacement();
     if (event.key.toLowerCase() === "r" && selectedId) rotateButton.click();
   });
+
+  loadSimulation();
 }
 
