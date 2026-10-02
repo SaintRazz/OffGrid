@@ -1,55 +1,250 @@
 {
+  "schema_version": "0.2",
+  "tile_size_ft": 5,
+  "time_base": "day",
   "facilities": [
+    {
+      "id": "grass-tile",
+      "name": "Centipedegrass lawn tile",
+      "image": "GrassTile.png",
+      "width": 1,
+      "height": 1,
+      "market_price": 0,
+      "inputs": {
+        "scat": {
+          "mode": "assimilation",
+          "capacity_per_day": 0.005,
+          "unit": "lb"
+        }
+      },
+      "outputs": {
+        "live_grass": {
+          "rate_per_day": 0.012,
+          "unit": "lb"
+        },
+        "insect_forage": {
+          "rate_per_day": 0.0011,
+          "unit": "lb"
+        }
+      },
+      "labor": {
+        "accrual_rate_per_day": null,
+        "attention_threshold_hours": null
+      },
+      "degradation_rate_per_year": 0,
+      "container": null,
+      "construction": {
+        "materials": {},
+        "labor_hours": null,
+        "energy_kwh": null,
+        "prerequisites": []
+      },
+      "notes": [
+        "Default unimproved lawn is centipedegrass.",
+        "Natural sunlight, rainfall, temperature, and ordinary soil conditions are abstracted.",
+        "Scat up to the assimilation capacity is treated as passively incorporated into the soil."
+      ]
+    },
     {
       "id": "chicken-coop",
       "name": "Chicken coop",
       "image": "ChickenCoop.png",
-      "width": 4,
-      "height": 3,
-      "inputs": {"feed": 0.25, "water": 2, "electricity": 0.1},
-      "outputs": {"eggs": 0.25, "organic_waste": 0.1},
-      "labor_hours": 0.15
-    },
-    {
-      "id": "solar-array",
-      "name": "Solar array",
-      "image": "ElectroSolar.png",
-      "width": 4,
-      "height": 3,
-      "inputs": {},
-      "outputs": {"electricity": 0.8},
-      "labor_hours": 0.01,
-      "production_window": {"start_hour": 6, "peak_hour": 12, "end_hour": 18}
-    },
-    {
-      "id": "garden-plot",
-      "name": "Garden plot",
-      "image": "InGroundPlot.png",
-      "width": 4,
-      "height": 2,
-      "inputs": {"water": 4, "electricity": 0.05},
-      "outputs": {"produce": 0.4},
-      "labor_hours": 0.25
-    },
-    {
-      "id": "bsfl-reactor",
-      "name": "BSFL reactor",
-      "image": "BSFLReactor.png",
       "width": 2,
       "height": 2,
-      "inputs": {"organic_waste": 0.5, "water": 0.2, "electricity": 0.1},
-      "outputs": {"bsfl_biomass": 0.2, "compost": 0.1},
-      "labor_hours": 0.1
+      "market_price": null,
+      "inputs": {
+        "feed": {
+          "rate_per_container_unit_per_day": 0.25,
+          "unit": "lb"
+        },
+        "water": {
+          "rate_per_container_unit_per_day": 0.05,
+          "unit": "gal"
+        }
+      },
+      "outputs": {
+        "eggs": {
+          "rate_per_container_unit_per_day": 0.7,
+          "unit": "egg"
+        },
+        "scat": {
+          "rate_per_container_unit_per_day": 0.125,
+          "unit": "lb"
+        }
+      },
+      "labor": {
+        "base_accrual_rate_per_day": 0.2,
+        "accrual_rate_per_container_unit_per_day": 0.01,
+        "attention_threshold_hours": 0.5
+      },
+      "degradation_rate_per_year": null,
+      "container": {
+        "type": "chicken",
+        "capacity": 30,
+        "unit": "bird"
+      },
+      "construction": {
+        "materials": {},
+        "labor_hours": null,
+        "energy_kwh": null,
+        "prerequisites": []
+      },
+      "notes": [
+        "Static shelter/roosting facility for free-ranging laying hens.",
+        "Feed, water, eggs, scat, and variable labor scale with current chicken count.",
+        "Current fill level is runtime state, not part of the facility type definition."
+      ]
     },
     {
       "id": "compost-pile",
       "name": "Compost pile",
       "image": "CompostPile.png",
+      "width": 1,
+      "height": 1,
+      "market_price": null,
+      "inputs": {
+        "scat": {
+          "mode": "shared_feedstock"
+        },
+        "kitchen_waste": {
+          "mode": "shared_feedstock"
+        },
+        "plant_litter": {
+          "mode": "shared_feedstock"
+        }
+      },
+      "outputs": {
+        "compost": {
+          "mass_yield_fraction": 0.4,
+          "unit": "lb"
+        },
+        "insect_forage": {
+          "rate_per_day_at_full_load": 0.02,
+          "unit": "lb"
+        }
+      },
+      "labor": {
+        "accrual_rate_per_day": 0.1,
+        "attention_threshold_hours": 0.5
+      },
+      "degradation_rate_per_year": 0,
+      "container": {
+        "type": "raw_organic_material",
+        "capacity": 500,
+        "unit": "lb"
+      },
+      "process": {
+        "nominal_processing_time_days": 120,
+        "full_load_processing_rate_per_day": 4.17,
+        "full_load_processing_rate_unit": "lb",
+        "full_load_compost_output_per_day": 1.67,
+        "full_load_compost_output_unit": "lb",
+        "processing_scales_with_current_contents": true
+      },
+      "construction": {
+        "materials": {},
+        "labor_hours": null,
+        "energy_kwh": null,
+        "prerequisites": []
+      },
+      "notes": [
+        "Well-designed and maintained aerobic pile on bare soil.",
+        "Shade, moisture, aeration, and suitable feedstock balance are assumed.",
+        "Untracked mass loss represents water vapor, carbon dioxide, drainage, and other biological losses."
+      ]
+    },
+    {
+      "id": "bsfl-reactor",
+      "name": "BSFL reactor",
+      "image": "BSFLReactor.png",
+      "width": 1,
+      "height": 1,
+      "market_price": null,
+      "inputs": {
+        "kitchen_waste": {
+          "mode": "feedstock"
+        }
+      },
+      "outputs": {
+        "insect_forage": {
+          "mode": "self_harvested_mature_larvae",
+          "unit": "lb"
+        },
+        "organic_residue": {
+          "mode": "frass_and_indigestible_residue",
+          "unit": "lb"
+        }
+      },
+      "labor": {
+        "accrual_rate_per_day": null,
+        "attention_threshold_hours": null
+      },
+      "degradation_rate_per_year": 0,
+      "container": {
+        "type": "kitchen_waste_feedstock",
+        "physical_volume_ft3": 40,
+        "approx_physical_volume_gal": 300,
+        "usable_capacity_lb": null
+      },
+      "process": {
+        "feeding_rate_lb_feed_per_lb_larvae_per_day": null,
+        "larval_yield_fraction": null,
+        "residue_yield_fraction": null,
+        "average_maturation_time_days": null,
+        "maximum_larval_biomass_lb": null,
+        "maximum_processing_rate_lb_per_day": null,
+        "process_states": [
+          "feedstock_mass",
+          "growing_larval_biomass",
+          "mature_larval_biomass",
+          "residue_mass",
+          "harvested_insect_forage"
+        ]
+      },
+      "construction": {
+        "materials": {},
+        "labor_hours": null,
+        "energy_kwh": null,
+        "prerequisites": []
+      },
+      "notes": [
+        "Physical bin dimensions are approximately 4 ft x 4 ft x 2.5 ft.",
+        "Liquid drainage and self-harvest ramps are assumed.",
+        "Conversion is population-dependent and delayed; values not yet researched remain null."
+      ]
+    },
+    {
+      "id": "solar-array",
+      "name": "Electrosolar array",
+      "image": "ElectroSolar.png",
       "width": 2,
-      "height": 2,
-      "inputs": {"organic_waste": 0.35, "water": 0.1},
-      "outputs": {"compost": 0.3},
-      "labor_hours": 0.1
+      "height": 3,
+      "market_price": 7000,
+      "inputs": {},
+      "outputs": {
+        "electricity": {
+          "average_rate_per_day": 9.0,
+          "unit": "kWh"
+        }
+      },
+      "labor": {
+        "accrual_rate_per_day": 0.0027,
+        "attention_threshold_hours": 0.5
+      },
+      "degradation_rate_per_year": 0.005,
+      "container": null,
+      "rated_capacity_kw": 2.5,
+      "construction": {
+        "materials": {},
+        "labor_hours": null,
+        "energy_kwh": null,
+        "prerequisites": []
+      },
+      "notes": [
+        "Sunlight and weather inputs are abstracted for the initial model.",
+        "Average output is annualized; time-of-day and weather variation can be added later.",
+        "Rated capacity is stored separately so later production logic can use environmental modifiers."
+      ]
     },
     {
       "id": "rain-barrel",
@@ -57,9 +252,66 @@
       "image": "RainBarrel.png",
       "width": 1,
       "height": 1,
+      "market_price": null,
+      "inputs": {
+        "rainwater": {
+          "average_rate_per_day": 10.0,
+          "unit": "gal",
+          "source": "100_sq_ft_roof_catchment"
+        }
+      },
+      "outputs": {
+        "non_potable_water": {
+          "mode": "stored_resource",
+          "unit": "gal"
+        }
+      },
+      "labor": {
+        "accrual_rate_per_day": 0,
+        "attention_threshold_hours": null
+      },
+      "degradation_rate_per_year": 0,
+      "container": {
+        "type": "non_potable_water",
+        "capacity": 55,
+        "unit": "gal"
+      },
+      "construction": {
+        "materials": {},
+        "labor_hours": null,
+        "energy_kwh": null,
+        "prerequisites": []
+      },
+      "notes": [
+        "Catchment is abstracted as approximately 10 ft x 10 ft of roof.",
+        "Intermittent rainfall is not yet modeled; 10 gal/day is the annualized average inflow."
+      ]
+    },
+    {
+      "id": "garden-plot",
+      "name": "In-ground garden plot",
+      "image": "InGroundPlot.png",
+      "width": 4,
+      "height": 2,
+      "market_price": null,
       "inputs": {},
-      "outputs": {"water": 0.15},
-      "labor_hours": 0.01
+      "outputs": {},
+      "labor": {
+        "accrual_rate_per_day": null,
+        "attention_threshold_hours": null
+      },
+      "degradation_rate_per_year": 0,
+      "container": null,
+      "construction": {
+        "materials": {},
+        "labor_hours": null,
+        "energy_kwh": null,
+        "prerequisites": []
+      },
+      "notes": [
+        "Crop-dependent inputs, outputs, labor, and production rates are intentionally deferred.",
+        "Garden behavior will be defined through a later planting/crop layer."
+      ]
     }
   ]
 }

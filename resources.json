@@ -1,14 +1,107 @@
 {
+  "schema_version": "0.2",
   "starting_at": "2026-04-01T08:00:00",
   "labor_hours_per_tick": 2.0,
   "resources": {
-    "electricity": {"name": "Electricity", "unit": "kWh", "initial_stock": 24, "capacity": 100},
-    "water": {"name": "Water", "unit": "gal", "initial_stock": 500, "capacity": 1000},
-    "feed": {"name": "Feed", "unit": "kg", "initial_stock": 20, "capacity": 200},
-    "eggs": {"name": "Eggs", "unit": "count", "initial_stock": 0, "capacity": 500},
-    "organic_waste": {"name": "Organic waste", "unit": "kg", "initial_stock": 10, "capacity": 500},
-    "produce": {"name": "Produce", "unit": "kg", "initial_stock": 0, "capacity": 500},
-    "bsfl_biomass": {"name": "BSFL biomass", "unit": "kg", "initial_stock": 0, "capacity": 500},
-    "compost": {"name": "Compost", "unit": "kg", "initial_stock": 0, "capacity": 500}
+    "electricity": {
+      "name": "Electricity",
+      "unit": "kWh",
+      "initial_stock": 0,
+      "capacity": null
+    },
+    "water": {
+      "name": "Water (legacy generic)",
+      "unit": "gal",
+      "initial_stock": 0,
+      "capacity": null,
+      "deprecated": true
+    },
+    "potable_water": {
+      "name": "Potable water",
+      "unit": "gal",
+      "initial_stock": 0,
+      "capacity": null
+    },
+    "non_potable_water": {
+      "name": "Non-potable water",
+      "unit": "gal",
+      "initial_stock": 0,
+      "capacity": null
+    },
+    "feed": {
+      "name": "Feed",
+      "unit": "lb",
+      "initial_stock": 0,
+      "capacity": null
+    },
+    "eggs": {
+      "name": "Eggs",
+      "unit": "egg",
+      "initial_stock": 0,
+      "capacity": null
+    },
+    "scat": {
+      "name": "Scat",
+      "unit": "lb",
+      "initial_stock": 0,
+      "capacity": null
+    },
+    "kitchen_waste": {
+      "name": "Kitchen waste",
+      "unit": "lb",
+      "initial_stock": 0,
+      "capacity": null
+    },
+    "plant_litter": {
+      "name": "Plant litter",
+      "unit": "lb",
+      "initial_stock": 0,
+      "capacity": null
+    },
+    "live_grass": {
+      "name": "Live grass",
+      "unit": "lb",
+      "initial_stock": 0,
+      "capacity": null
+    },
+    "insect_forage": {
+      "name": "Insect forage",
+      "unit": "lb",
+      "initial_stock": 0,
+      "capacity": null
+    },
+    "compost": {
+      "name": "Compost",
+      "unit": "lb",
+      "initial_stock": 0,
+      "capacity": null
+    },
+    "organic_residue": {
+      "name": "Organic residue",
+      "unit": "lb",
+      "initial_stock": 0,
+      "capacity": null
+    },
+    "organic_waste": {
+      "name": "Organic waste (legacy)",
+      "unit": "lb",
+      "initial_stock": 0,
+      "capacity": null,
+      "deprecated": true
+    },
+    "produce": {
+      "name": "Produce (legacy)",
+      "unit": "lb",
+      "initial_stock": 0,
+      "capacity": null,
+      "deprecated": true
+    },
+    "bsfl_biomass": {
+      "name": "BSFL biomass (legacy)",
+      "unit": "lb",
+      "initial_stock": 0,
+      "capacity": null,
+      "deprecated": true
+    }
   }
 }
