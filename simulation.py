@@ -1,5 +1,6 @@
 import json
 from copy import deepcopy
+from datetime import datetime, timedelta
 from pathlib import Path
 
 
@@ -130,7 +131,60 @@ class Simulation:
     # ------------------------------------------------------------------
 
     def state(self):
+        """
+        Return the current simulation state.
+
+        During the frontend migration this deliberately exposes both:
+        1. the new GameState-oriented schema, and
+        2. compatibility fields expected by the original JavaScript UI.
+        """
+        day = int(self.game_state["time"].get("day", 1))
+        hour = int(self.game_state["time"].get("hour", 0))
+
+        # Temporary compatibility timestamp for the existing frontend.
+        # Day 1 maps to the original prototype start date.
+        start_text = self.resource_config.get(
+            "starting_at",
+            "2026-04-01T00:00:00",
+        )
+        try:
+            start_time = datetime.fromisoformat(start_text)
+        except (TypeError, ValueError):
+            start_time = datetime(2026, 4, 1, 0, 0)
+
+        current_time = (
+            start_time.replace(hour=0, minute=0, second=0, microsecond=0)
+            + timedelta(days=day - 1, hours=hour)
+        )
+
+        # Compatibility resource structure expected by the original UI.
+        # GameState inventories remain authoritative.
+        resources = {}
+        for resource_id, definition in self.resource_definitions.items():
+            resources[resource_id] = {
+                **deepcopy(definition),
+                "amount": round(
+                    float(
+                        self.game_state["inventories"].get(
+                            resource_id,
+                            definition.get("initial_stock", 0.0),
+                        )
+                    ),
+                    4,
+                ),
+            }
+
         return {
+            # Compatibility fields for the existing frontend
+            "current_time": current_time.isoformat(),
+            "tick_count": max(0, ((day - 1) * HOURS_PER_DAY) + hour),
+            "labor_hours_per_tick": self.resource_config.get(
+                "labor_hours_per_tick",
+                0.0,
+            ),
+            "resources": resources,
+
+            # New state model
             "schema_version": self.game_state.get("schema_version"),
             "time": deepcopy(self.game_state["time"]),
             "household": deepcopy(self.game_state["household"]),
