@@ -1,0 +1,37 @@
+{
+  "schema_version": "0.1",
+  "time": {
+    "day": 1,
+    "hour": 8
+  },
+  "household": {
+    "money": 10000.0,
+    "labor_available_hours": 4.0
+  },
+  "inventories": {
+    "feed": 0.0,
+    "eggs": 0.0,
+    "scat": 0.0,
+    "compost": 0.0,
+    "insect_forage": 0.0,
+    "live_grass": 0.0,
+    "kitchen_waste": 0.0,
+    "plant_litter": 0.0,
+    "organic_residue": 0.0,
+    "non_potable_water": 0.0
+  },
+  "current_flows": {
+    "electricity_generated_this_tick_kwh": 0.0,
+    "electricity_consumed_this_tick_kwh": 0.0,
+    "grid_electricity_this_tick_kwh": 0.0,
+    "municipal_water_this_tick_gal": 0.0
+  },
+  "map": {
+    "tile_size_ft": 5,
+    "width_tiles": 42,
+    "height_tiles": 42,
+    "default_tile": "grass-tile"
+  },
+  "tile_states": [],
+  "facilities": []
+}
