@@ -391,3 +391,143 @@ body {
   pointer-events: none;
 }
 
+/* ------------------------------------------------------------
+   New game / load game startup overlay
+   ------------------------------------------------------------ */
+
+.startup-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 2000;
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+  background: rgba(20, 24, 22, 0.72);
+  backdrop-filter: blur(2px);
+}
+
+.startup-overlay[hidden] {
+  display: none;
+}
+
+.startup-dialog {
+  width: min(460px, 100%);
+  max-height: min(80vh, 700px);
+  overflow-y: auto;
+  padding: 1.1rem;
+  background: #f3f2e8;
+  color: var(--ink);
+  border: 2px solid var(--panel-border);
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.38);
+}
+
+.startup-dialog h1 {
+  margin: 0;
+  font-size: 1.35rem;
+  letter-spacing: 0.03em;
+}
+
+.startup-dialog h2 {
+  margin: 0 0 0.65rem;
+  font-size: 1rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.startup-intro {
+  margin: 0.55rem 0 1rem;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+.startup-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.65rem;
+}
+
+.startup-button,
+.save-game-option {
+  border: 1px solid var(--panel-border);
+  border-radius: 2px;
+  background: #f6f5ec;
+  color: var(--ink);
+  font: inherit;
+  cursor: pointer;
+}
+
+.startup-button {
+  min-height: 42px;
+  padding: 0.55rem 0.75rem;
+  font-weight: 700;
+}
+
+.startup-button.primary {
+  background: #e3ead3;
+  outline: 2px solid #567344;
+  outline-offset: -2px;
+}
+
+.startup-button.secondary {
+  margin-top: 0.75rem;
+}
+
+.startup-button:hover:not(:disabled),
+.save-game-option:hover:not(:disabled) {
+  background: #e3ead3;
+}
+
+.startup-button:disabled,
+.save-game-option:disabled {
+  opacity: 0.55;
+  cursor: wait;
+}
+
+.load-game-panel[hidden],
+.startup-actions[hidden] {
+  display: none;
+}
+
+.save-game-list {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.save-game-option {
+  display: grid;
+  gap: 0.15rem;
+  width: 100%;
+  padding: 0.6rem 0.7rem;
+  text-align: left;
+}
+
+.save-game-option strong {
+  font-size: 0.86rem;
+}
+
+.save-game-option small {
+  color: var(--muted);
+  font-size: 0.72rem;
+  overflow-wrap: anywhere;
+}
+
+.no-saves-message {
+  margin: 0;
+  padding: 0.7rem;
+  border: 1px solid rgba(42, 47, 42, 0.35);
+  color: var(--muted);
+}
+
+.startup-status {
+  min-height: 1.3em;
+  margin: 0.75rem 0 0;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+@media (max-width: 520px) {
+  .startup-actions {
+    grid-template-columns: 1fr;
+  }
+}
+

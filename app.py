@@ -16,8 +16,8 @@ NEW_GAME_FILE = BASE_DIR / "NewGame.json"
 ACTIVE_GAME_FILE = BASE_DIR / "ActiveGame.json"
 SAVES_DIR = BASE_DIR / "saves"
 
-# Set during startup after the user chooses New Game or a saved game.
 CURRENT_GAME_FILE = None
+app.extensions["simulation"] = None
 
 
 def calculate_system_preview(daily_load_kwh, solar_kw, battery_kwh, autonomy_days):
@@ -64,13 +64,27 @@ def calculate_system_preview(daily_load_kwh, solar_kw, battery_kwh, autonomy_day
     }
 
 
+def create_simulation(game_state_file):
+    return Simulation(
+        facilities_file=FACILITIES_FILE,
+        resources_file=RESOURCES_FILE,
+        game_state_file=game_state_file,
+    )
+
+
+def get_simulation():
+    simulation = app.extensions.get("simulation")
+    if simulation is None:
+        raise RuntimeError("No game is currently loaded.")
+    return simulation
+
+
 def find_saved_games():
     """
-    Return JSON files that are reasonable candidates for saved games.
+    Return loadable JSON save files.
 
-    Definition/configuration files and the immutable NewGame template are
-    excluded. Root-level GameState.json remains discoverable, and any JSON
-    files in ./saves are also included.
+    NewGame.json is an immutable template and ActiveGame.json is the temporary
+    working state for a newly started game, so neither is shown as a saved game.
     """
     excluded_names = {
         FACILITIES_FILE.name,
@@ -92,100 +106,51 @@ def find_saved_games():
     return candidates
 
 
-def choose_game_file():
+def save_record(path):
     """
-    Prompt in the terminal for New Game or Load Game.
-
-    New Game copies the pristine NewGame.json template to ActiveGame.json.
-    This prevents normal ticking/autosaving from ever modifying NewGame.json.
-    Loading a save uses that selected save file directly, so subsequent ticks
-    continue updating that save.
+    Create a browser-safe identifier for a save without exposing arbitrary
+    filesystem paths to the load endpoint.
     """
-    print()
-    print("Homestead Simulation")
-    print("--------------------")
-    print("1. Start a new game")
-    print("2. Load a saved game")
+    try:
+        relative = path.relative_to(BASE_DIR)
+    except ValueError:
+        relative = Path(path.name)
 
-    while True:
-        choice = input("Choose 1 or 2: ").strip()
+    relative_text = relative.as_posix()
 
-        if choice == "1":
-            if not NEW_GAME_FILE.exists():
-                raise FileNotFoundError(
-                    f"New-game template not found: {NEW_GAME_FILE}"
-                )
-
-            shutil.copyfile(NEW_GAME_FILE, ACTIVE_GAME_FILE)
-            print(f"New game loaded from {NEW_GAME_FILE.name}.")
-            print(f"Runtime state will autosave to {ACTIVE_GAME_FILE.name}.")
-            return ACTIVE_GAME_FILE
-
-        if choice == "2":
-            saved_games = find_saved_games()
-
-            if not saved_games:
-                print("No saved games were found.")
-                print("Choose 1 to start a new game.")
-                continue
-
-            print()
-            print("Saved games:")
-            for index, path in enumerate(saved_games, start=1):
-                try:
-                    display_name = path.relative_to(BASE_DIR)
-                except ValueError:
-                    display_name = path.name
-                print(f"{index}. {display_name}")
-
-            while True:
-                selection = input(
-                    "Choose a saved game number, or B to go back: "
-                ).strip()
-
-                if selection.lower() == "b":
-                    break
-
-                try:
-                    save_index = int(selection) - 1
-                except ValueError:
-                    print("Please enter a valid number or B.")
-                    continue
-
-                if 0 <= save_index < len(saved_games):
-                    selected = saved_games[save_index]
-                    print(f"Loading saved game: {selected.name}")
-                    return selected
-
-                print("That save number is not valid.")
-
-            print()
-            print("1. Start a new game")
-            print("2. Load a saved game")
-            continue
-
-        print("Please enter 1 or 2.")
+    return {
+        "id": relative_text,
+        "filename": path.name,
+        "label": path.stem,
+        "path": relative_text,
+    }
 
 
-def create_simulation(game_state_file):
+def resolve_save_id(save_id):
     """
-    Build the authoritative simulation object using the selected runtime/save
-    state file.
+    Resolve only files that are already in the server-generated save list.
     """
-    return Simulation(
-        facilities_file=FACILITIES_FILE,
-        resources_file=RESOURCES_FILE,
-        game_state_file=game_state_file,
-    )
+    records = {
+        record["id"]: path
+        for path in find_saved_games()
+        for record in [save_record(path)]
+    }
+
+    selected = records.get(save_id)
+
+    if selected is None:
+        raise ValueError("Unknown saved game.")
+
+    return selected
 
 
-def get_simulation():
-    simulation = app.extensions.get("simulation")
-    if simulation is None:
-        raise RuntimeError(
-            "Simulation has not been initialized. Start the application with "
-            "'python app.py' and choose New Game or Load Game."
-        )
+def activate_game(game_state_file):
+    global CURRENT_GAME_FILE
+
+    simulation = create_simulation(game_state_file)
+    CURRENT_GAME_FILE = game_state_file
+    app.extensions["simulation"] = simulation
+
     return simulation
 
 
@@ -194,12 +159,77 @@ def index():
     return render_template("index.html")
 
 
+@app.get("/api/session")
+def session_status():
+    return jsonify({
+        "game_loaded": app.extensions.get("simulation") is not None,
+        "file": CURRENT_GAME_FILE.name if CURRENT_GAME_FILE else None,
+    })
+
+
+@app.get("/api/saves")
+def saved_games():
+    return jsonify({
+        "saves": [
+            save_record(path)
+            for path in find_saved_games()
+        ]
+    })
+
+
+@app.post("/api/new-game")
+def new_game():
+    if not NEW_GAME_FILE.exists():
+        return jsonify({
+            "error": f"New-game template not found: {NEW_GAME_FILE.name}"
+        }), 500
+
+    try:
+        shutil.copyfile(NEW_GAME_FILE, ACTIVE_GAME_FILE)
+        simulation = activate_game(ACTIVE_GAME_FILE)
+    except (OSError, json.JSONDecodeError, TypeError, ValueError, KeyError) as exc:
+        return jsonify({"error": str(exc)}), 500
+
+    return jsonify({
+        "status": "new_game",
+        "file": ACTIVE_GAME_FILE.name,
+        "state": simulation.state(),
+    })
+
+
+@app.post("/api/load-game")
+def load_game():
+    payload = request.get_json(silent=True) or {}
+    save_id = payload.get("save_id")
+
+    if not isinstance(save_id, str) or not save_id.strip():
+        return jsonify({"error": "A saved game must be selected."}), 400
+
+    try:
+        selected = resolve_save_id(save_id)
+        simulation = activate_game(selected)
+    except (
+        OSError,
+        json.JSONDecodeError,
+        TypeError,
+        ValueError,
+        KeyError,
+    ) as exc:
+        return jsonify({"error": str(exc)}), 400
+
+    return jsonify({
+        "status": "loaded",
+        "file": selected.name,
+        "state": simulation.state(),
+    })
+
+
 @app.get("/api/simulation")
 def simulation_state():
     try:
         return jsonify(get_simulation().state())
     except RuntimeError as exc:
-        return jsonify({"error": str(exc)}), 503
+        return jsonify({"error": str(exc)}), 409
 
 
 @app.post("/api/facilities")
@@ -244,10 +274,6 @@ def save_simulation():
 
 @app.post("/api/reload")
 def reload_simulation():
-    """
-    Reload the currently selected game-state file from disk without restarting
-    Flask.
-    """
     try:
         get_simulation().load_game_state()
     except (
@@ -281,9 +307,5 @@ def system_preview():
 
 
 if __name__ == "__main__":
-    CURRENT_GAME_FILE = choose_game_file()
-    app.extensions["simulation"] = create_simulation(CURRENT_GAME_FILE)
-
-    # Disable Flask's automatic reloader so the startup prompt only appears
-    # once. Debug mode remains enabled for development.
+    # No terminal prompt. The browser startup overlay chooses New Game or Load Game.
     app.run(debug=True, use_reloader=False)

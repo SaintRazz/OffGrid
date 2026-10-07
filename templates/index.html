@@ -8,9 +8,29 @@
     <script src="{{ url_for('static', filename='script.js') }}" defer></script>
   </head>
   <body>
+    <div id="startup-overlay" class="startup-overlay" role="dialog" aria-modal="true" aria-labelledby="startup-title">
+      <div class="startup-dialog">
+        <h1 id="startup-title">Homestead Simulation</h1>
+        <p class="startup-intro">Start with an unimproved property or load an existing saved game.</p>
+
+        <div id="startup-main-actions" class="startup-actions">
+          <button id="new-game-button" class="startup-button primary" type="button">New Game</button>
+          <button id="load-game-button" class="startup-button" type="button">Load Game</button>
+        </div>
+
+        <div id="load-game-panel" class="load-game-panel" hidden>
+          <h2>Saved Games</h2>
+          <div id="save-game-list" class="save-game-list"></div>
+          <button id="back-to-start-button" class="startup-button secondary" type="button">Back</button>
+        </div>
+
+        <p id="startup-status" class="startup-status" aria-live="polite"></p>
+      </div>
+    </div>
+
     <div class="game-shell">
       <header class="topbar">
-        <div class="stat"><span class="label">Calendar</span><strong id="simulation-date">Loading</strong></div>
+        <div class="stat"><span class="label">Calendar</span><strong id="simulation-date">Not started</strong></div>
         <div class="stat"><span class="label">Clock</span><strong id="simulation-clock">--:--</strong></div>
         <div class="stat"><span class="label">Electricity</span><strong id="stat-electricity">--</strong></div>
         <div class="stat"><span class="label">Water</span><strong id="stat-water">--</strong></div>
@@ -48,14 +68,16 @@
               <li>Septic</li>
             </ul>
           </div>
+
           <div class="panel-block">
             <h3>Resources</h3>
             <ul id="resource-list" aria-live="polite"></ul>
           </div>
+
           <div class="panel-block">
             <h3>Operations</h3>
             <ul id="facility-status-list" aria-live="polite">
-              <li>No facilities placed.</li>
+              <li>No game loaded.</li>
             </ul>
           </div>
         </aside>
@@ -64,10 +86,10 @@
           <div class="map-header">
             <span>Property Map</span>
             <span>42 × 42 tiles · 5 ft per tile</span>
-            <button id="advance-tick" class="control-button" type="button">Advance 1 hour</button>
+            <button id="advance-tick" class="control-button" type="button" disabled>Advance 1 hour</button>
           </div>
           <div id="land-grid" class="land-grid" role="grid" aria-label="Property map"></div>
-          <p id="placement-status" class="placement-status" aria-live="polite">Select a structure, then click an open tile to place it.</p>
+          <p id="placement-status" class="placement-status" aria-live="polite">Choose New Game or Load Game to begin.</p>
         </main>
 
         <aside class="panel side-panel right-panel">
