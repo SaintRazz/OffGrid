@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>OffGrid Simulation Mockup</title>
+    <title>Homestead Simulation</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
     <script src="{{ url_for('static', filename='script.js') }}" defer></script>
   </head>
@@ -30,55 +30,51 @@
 
     <div class="game-shell">
       <header class="topbar">
-        <div class="stat"><span class="label">Calendar</span><strong id="simulation-date">Not started</strong></div>
-        <div class="stat"><span class="label">Clock</span><strong id="simulation-clock">--:--</strong></div>
-        <div class="stat"><span class="label">Electricity</span><strong id="stat-electricity">--</strong></div>
-        <div class="stat"><span class="label">Water</span><strong id="stat-water">--</strong></div>
-        <div class="stat"><span class="label">Produce</span><strong id="stat-produce">--</strong></div>
+        <div class="game-identity">
+          <span class="topbar-label">Current Game</span>
+          <strong id="current-game-name">No game loaded</strong>
+        </div>
+        <div class="game-time" aria-label="Simulation date and time">
+          <span id="simulation-date">Not started</span>
+          <strong id="simulation-clock">--:--</strong>
+        </div>
       </header>
 
       <div class="main-layout">
         <aside class="panel side-panel left-panel">
-          <div class="panel-block">
-            <h3>Household</h3>
-            <ul>
-              <li>Occupants: 4</li>
-              <li>Power demand: 24 kWh/day</li>
-              <li>Water use: 220 gal/day</li>
-              <li>Waste output: 3.6 kg/day</li>
-            </ul>
-          </div>
+          <nav class="info-tabs" aria-label="Property information">
+            <button class="info-tab is-active" type="button" data-panel="household-panel" aria-selected="true">Household</button>
+            <button class="info-tab" type="button" data-panel="consumption-panel" aria-selected="false">Consumption</button>
+            <button class="info-tab" type="button" data-panel="waste-water-panel" aria-selected="false">Waste + Water</button>
+            <button class="info-tab" type="button" data-panel="resources-panel" aria-selected="false">Resources</button>
+            <button class="info-tab" type="button" data-panel="operations-panel" aria-selected="false">Operations</button>
+          </nav>
 
-          <div class="panel-block">
-            <h3>Consumption</h3>
-            <ul>
-              <li>Appliances</li>
-              <li>HVAC</li>
-              <li>Cooking</li>
-              <li>Hot water</li>
-            </ul>
-          </div>
+          <div class="tab-panels">
+            <section id="household-panel" class="info-panel is-active">
+              <h3>Household</h3>
+              <ul><li>Occupants: 4</li></ul>
+            </section>
 
-          <div class="panel-block">
-            <h3>Waste + Water</h3>
-            <ul>
-              <li>Greywater</li>
-              <li>Compost</li>
-              <li>Rain capture</li>
-              <li>Septic</li>
-            </ul>
-          </div>
+            <section id="consumption-panel" class="info-panel" hidden>
+              <h3>Consumption</h3>
+              <p class="panel-note">Household consumption totals will be shown here from simulation data rather than fixed placeholder rates.</p>
+            </section>
 
-          <div class="panel-block">
-            <h3>Resources</h3>
-            <ul id="resource-list" aria-live="polite"></ul>
-          </div>
+            <section id="waste-water-panel" class="info-panel" hidden>
+              <h3>Waste + Water</h3>
+              <p class="panel-note">Water use, recovered water, and material residuals will be summarized here as those systems are modeled.</p>
+            </section>
 
-          <div class="panel-block">
-            <h3>Operations</h3>
-            <ul id="facility-status-list" aria-live="polite">
-              <li>No game loaded.</li>
-            </ul>
+            <section id="resources-panel" class="info-panel" hidden>
+              <h3>Resources</h3>
+              <ul id="resource-list" aria-live="polite"></ul>
+            </section>
+
+            <section id="operations-panel" class="info-panel" hidden>
+              <h3>Operations</h3>
+              <ul id="facility-status-list" aria-live="polite"><li>No game loaded.</li></ul>
+            </section>
           </div>
         </aside>
 
@@ -93,23 +89,15 @@
         </main>
 
         <aside class="panel side-panel right-panel">
-          <div class="panel-block">
+          <div class="build-panel">
             <h3>Build</h3>
             <div id="build-list" class="build-list" aria-label="Structures"></div>
             <div class="build-controls">
-              <button id="rotate-building" class="control-button" type="button" disabled>Rotate 90°</button>
-              <button id="cancel-building" class="control-button" type="button" disabled>Cancel</button>
+              <button id="cancel-building" class="control-button" type="button" disabled>Cancel Placement</button>
             </div>
           </div>
         </aside>
       </div>
-
-      <footer class="bottom-bar panel">
-        <div class="bottom-item"><span>Build</span></div>
-        <div class="bottom-item"><span>Resources</span></div>
-        <div class="bottom-item"><span>Goals</span></div>
-        <div class="bottom-item"><span>Statistics</span></div>
-      </footer>
     </div>
   </body>
 </html>

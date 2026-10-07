@@ -17,6 +17,7 @@ ACTIVE_GAME_FILE = BASE_DIR / "ActiveGame.json"
 SAVES_DIR = BASE_DIR / "saves"
 
 CURRENT_GAME_FILE = None
+CURRENT_GAME_NAME = None
 app.extensions["simulation"] = None
 
 
@@ -144,11 +145,12 @@ def resolve_save_id(save_id):
     return selected
 
 
-def activate_game(game_state_file):
-    global CURRENT_GAME_FILE
+def activate_game(game_state_file, game_name=None):
+    global CURRENT_GAME_FILE, CURRENT_GAME_NAME
 
     simulation = create_simulation(game_state_file)
     CURRENT_GAME_FILE = game_state_file
+    CURRENT_GAME_NAME = game_name or game_state_file.stem
     app.extensions["simulation"] = simulation
 
     return simulation
@@ -164,6 +166,7 @@ def session_status():
     return jsonify({
         "game_loaded": app.extensions.get("simulation") is not None,
         "file": CURRENT_GAME_FILE.name if CURRENT_GAME_FILE else None,
+        "game_name": CURRENT_GAME_NAME,
     })
 
 
@@ -186,13 +189,14 @@ def new_game():
 
     try:
         shutil.copyfile(NEW_GAME_FILE, ACTIVE_GAME_FILE)
-        simulation = activate_game(ACTIVE_GAME_FILE)
+        simulation = activate_game(ACTIVE_GAME_FILE, "New Game")
     except (OSError, json.JSONDecodeError, TypeError, ValueError, KeyError) as exc:
         return jsonify({"error": str(exc)}), 500
 
     return jsonify({
         "status": "new_game",
         "file": ACTIVE_GAME_FILE.name,
+        "game_name": CURRENT_GAME_NAME,
         "state": simulation.state(),
     })
 
@@ -207,7 +211,7 @@ def load_game():
 
     try:
         selected = resolve_save_id(save_id)
-        simulation = activate_game(selected)
+        simulation = activate_game(selected, selected.stem)
     except (
         OSError,
         json.JSONDecodeError,
@@ -220,6 +224,7 @@ def load_game():
     return jsonify({
         "status": "loaded",
         "file": selected.name,
+        "game_name": CURRENT_GAME_NAME,
         "state": simulation.state(),
     })
 
@@ -241,7 +246,7 @@ def place_facility():
             facility_id=payload.get("facility_id"),
             column=payload.get("column"),
             row=payload.get("row"),
-            rotated=payload.get("rotated", False),
+            rotated=False,
         )
     except (RuntimeError, TypeError, ValueError, KeyError) as exc:
         return jsonify({"error": str(exc)}), 400
