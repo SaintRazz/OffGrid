@@ -12,6 +12,7 @@ app = Flask(__name__)
 BASE_DIR = Path(__file__).resolve().parent
 FACILITIES_FILE = BASE_DIR / "facilities.json"
 RESOURCES_FILE = BASE_DIR / "resources.json"
+HOUSEHOLD_PROFILE_FILE = BASE_DIR / "HouseholdProfile.json"
 NEW_GAME_FILE = BASE_DIR / "NewGame.json"
 ACTIVE_GAME_FILE = BASE_DIR / "ActiveGame.json"
 SAVES_DIR = BASE_DIR / "saves"
@@ -69,6 +70,7 @@ def create_simulation(game_state_file):
     return Simulation(
         facilities_file=FACILITIES_FILE,
         resources_file=RESOURCES_FILE,
+        household_profile_file=HOUSEHOLD_PROFILE_FILE,
         game_state_file=game_state_file,
     )
 
@@ -90,6 +92,7 @@ def find_saved_games():
     excluded_names = {
         FACILITIES_FILE.name,
         RESOURCES_FILE.name,
+        HOUSEHOLD_PROFILE_FILE.name,
         NEW_GAME_FILE.name,
         ACTIVE_GAME_FILE.name,
     }

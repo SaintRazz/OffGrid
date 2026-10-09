@@ -12,20 +12,28 @@ class Simulation:
     """
     Core simulation engine.
 
-    Static rules come from facilities.json (and optionally resources.json).
-    Dynamic world state comes from GameState.json.
+    Static rules come from facilities.json, resources.json, and
+    HouseholdProfile.json. Dynamic world state comes from GameState.json.
     One call to advance_hour() processes one one-hour simulation tick.
     """
 
-    def __init__(self, facilities_file, resources_file, game_state_file):
+    def __init__(
+        self,
+        facilities_file,
+        resources_file,
+        household_profile_file,
+        game_state_file,
+    ):
         self.facilities_file = Path(facilities_file)
         self.resources_file = Path(resources_file)
+        self.household_profile_file = Path(household_profile_file)
         self.game_state_file = Path(game_state_file)
 
         self.facility_config = {}
         self.facility_definitions = {}
         self.resource_config = {}
         self.resource_definitions = {}
+        self.household_profile = {}
         self.game_state = {}
 
         self.load_definitions()
@@ -55,6 +63,14 @@ class Simulation:
             self.resource_config = {}
             self.resource_definitions = {}
 
+        if not self.household_profile_file.exists():
+            raise FileNotFoundError(
+                f"Household profile not found: {self.household_profile_file}"
+            )
+
+        with self.household_profile_file.open(encoding="utf-8") as file:
+            self.household_profile = json.load(file)
+
     def load_game_state(self):
         with self.game_state_file.open(encoding="utf-8") as file:
             self.game_state = json.load(file)
@@ -75,6 +91,11 @@ class Simulation:
         self.game_state.setdefault("schema_version", "0.1")
         self.game_state.setdefault("time", {"day": 1, "hour": 0})
         self.game_state.setdefault("household", {})
+        self.game_state.setdefault(
+            "household_profile_id",
+            self.household_profile.get("profile_id", "default-household"),
+        )
+        self.game_state.setdefault("house_upgrades", {})
         self.game_state.setdefault("inventories", {})
         self.game_state.setdefault("current_flows", {})
         self.game_state.setdefault("map", {})
@@ -125,6 +146,50 @@ class Simulation:
         instance.setdefault("condition", 1.0)
         instance.setdefault("accrued_labor_requirement", 0.0)
         instance.setdefault("last_operation", None)
+
+    # ------------------------------------------------------------------
+    # Household profile helpers
+    # ------------------------------------------------------------------
+
+    def household_daily_baseline(self):
+        """
+        Return the static daily household baseline from HouseholdProfile.json.
+
+        These values are intentionally annual-average daily equivalents. House
+        upgrades can modify them later without changing the source profile.
+        """
+        daily_flows = deepcopy(self.household_profile.get("daily_flows", {}))
+        electricity = deepcopy(
+            self.household_profile.get("electricity_kwh_per_day", {})
+        )
+
+        return {
+            "daily_flows": daily_flows,
+            "electricity_kwh_per_day": electricity,
+        }
+
+    def household_hourly_baseline(self):
+        """
+        Convert the daily profile into one-hour simulation quantities.
+        """
+        baseline = self.household_daily_baseline()
+
+        hourly_flows = {
+            key: round(float(value) / HOURS_PER_DAY, 6)
+            for key, value in baseline["daily_flows"].items()
+            if isinstance(value, (int, float))
+        }
+
+        hourly_electricity = {
+            key: round(float(value) / HOURS_PER_DAY, 6)
+            for key, value in baseline["electricity_kwh_per_day"].items()
+            if isinstance(value, (int, float))
+        }
+
+        return {
+            "hourly_flows": hourly_flows,
+            "electricity_kwh_per_hour": hourly_electricity,
+        }
 
     # ------------------------------------------------------------------
     # Public state
@@ -188,6 +253,11 @@ class Simulation:
             "schema_version": self.game_state.get("schema_version"),
             "time": deepcopy(self.game_state["time"]),
             "household": deepcopy(self.game_state["household"]),
+            "household_profile_id": self.game_state.get("household_profile_id"),
+            "household_profile": deepcopy(self.household_profile),
+            "house_upgrades": deepcopy(self.game_state["house_upgrades"]),
+            "household_baseline_daily": self.household_daily_baseline(),
+            "household_baseline_hourly": self.household_hourly_baseline(),
             "inventories": deepcopy(self.game_state["inventories"]),
             "current_flows": deepcopy(self.game_state["current_flows"]),
             "map": deepcopy(self.game_state["map"]),
@@ -309,8 +379,9 @@ class Simulation:
         processed_hour = self.game_state["time"]["hour"]
 
         self._reset_tick_flows()
+        household_operation = self._process_household_baseline()
 
-        operations = []
+        operations = [household_operation]
 
         # The default lawn covers all unoccupied map tiles.  It is processed
         # as an aggregate instead of creating ~1,700 grass facility objects.
@@ -339,6 +410,8 @@ class Simulation:
                 "instance_id": instance["instance_id"],
                 **deepcopy(operation),
             })
+
+        self._finalize_external_utility_flows()
 
         self._advance_clock()
         self.save()
@@ -433,6 +506,127 @@ class Simulation:
         flows.setdefault("electricity_consumed_this_tick_kwh", 0.0)
         flows.setdefault("grid_electricity_this_tick_kwh", 0.0)
         flows.setdefault("municipal_water_this_tick_gal", 0.0)
+
+        flows.setdefault("groceries_this_tick_usd", 0.0)
+        flows.setdefault("tap_water_demand_this_tick_gal", 0.0)
+        flows.setdefault("greywater_generated_this_tick_gal", 0.0)
+        flows.setdefault("blackwater_generated_this_tick_gal", 0.0)
+        flows.setdefault("other_water_use_this_tick_gal", 0.0)
+        flows.setdefault("kitchen_waste_generated_this_tick_lb", 0.0)
+        flows.setdefault("recyclable_paper_generated_this_tick_lb", 0.0)
+        flows.setdefault("recyclable_plastic_generated_this_tick_lb", 0.0)
+        flows.setdefault("recyclable_glass_generated_this_tick_lb", 0.0)
+        flows.setdefault("recyclable_metal_generated_this_tick_lb", 0.0)
+        flows.setdefault("residual_nonfood_waste_generated_this_tick_lb", 0.0)
+
+    def _process_household_baseline(self):
+        """
+        Apply one hour of baseline household demand and waste generation.
+
+        For this iteration, household needs are not yet modified by upgrades.
+        Utility demand and waste generation are recorded as flows rather than
+        automatically routed into storage or disposal systems.
+        """
+        hourly = self.household_hourly_baseline()
+        flows = self.game_state["current_flows"]
+        household_flows = hourly["hourly_flows"]
+        electricity = hourly["electricity_kwh_per_hour"]
+
+        groceries = household_flows.get("groceries_usd", 0.0)
+        tap_water = household_flows.get("tap_water_gal", 0.0)
+        greywater = household_flows.get("greywater_gal", 0.0)
+        blackwater = household_flows.get("blackwater_gal", 0.0)
+        other_water = household_flows.get("other_water_use_gal", 0.0)
+
+        flows["groceries_this_tick_usd"] = groceries
+        flows["tap_water_demand_this_tick_gal"] = tap_water
+        flows["greywater_generated_this_tick_gal"] = greywater
+        flows["blackwater_generated_this_tick_gal"] = blackwater
+        flows["other_water_use_this_tick_gal"] = other_water
+
+        # Until household water-supply systems are implemented, all tap-water
+        # demand is supplied externally by the municipal/tap-water source.
+        flows["municipal_water_this_tick_gal"] = tap_water
+
+        waste_key_map = {
+            "kitchen_waste_lb": "kitchen_waste_generated_this_tick_lb",
+            "recyclable_paper_lb": "recyclable_paper_generated_this_tick_lb",
+            "recyclable_plastic_lb": "recyclable_plastic_generated_this_tick_lb",
+            "recyclable_glass_lb": "recyclable_glass_generated_this_tick_lb",
+            "recyclable_metal_lb": "recyclable_metal_generated_this_tick_lb",
+            "residual_nonfood_waste_lb": (
+                "residual_nonfood_waste_generated_this_tick_lb"
+            ),
+        }
+
+        for profile_key, flow_key in waste_key_map.items():
+            flows[flow_key] = household_flows.get(profile_key, 0.0)
+
+        total_electricity = electricity.get("total", 0.0)
+        flows["electricity_consumed_this_tick_kwh"] = total_electricity
+
+        end_use_electricity = {
+            key: value
+            for key, value in electricity.items()
+            if key != "total"
+        }
+
+        return {
+            "instance_id": "__household__",
+            "facility_id": "household",
+            "status": "operating",
+            "consumed": {
+                "groceries_usd": round(groceries, 6),
+                "tap_water_gal": round(tap_water, 6),
+                "electricity_kwh": round(total_electricity, 6),
+            },
+            "produced": {
+                "greywater_gal": round(greywater, 6),
+                "blackwater_gal": round(blackwater, 6),
+                "kitchen_waste_lb": round(
+                    household_flows.get("kitchen_waste_lb", 0.0), 6
+                ),
+                "recyclable_paper_lb": round(
+                    household_flows.get("recyclable_paper_lb", 0.0), 6
+                ),
+                "recyclable_plastic_lb": round(
+                    household_flows.get("recyclable_plastic_lb", 0.0), 6
+                ),
+                "recyclable_glass_lb": round(
+                    household_flows.get("recyclable_glass_lb", 0.0), 6
+                ),
+                "recyclable_metal_lb": round(
+                    household_flows.get("recyclable_metal_lb", 0.0), 6
+                ),
+                "residual_nonfood_waste_lb": round(
+                    household_flows.get("residual_nonfood_waste_lb", 0.0), 6
+                ),
+            },
+            "electricity_end_use_kwh": end_use_electricity,
+            "note": (
+                "Household flows currently use the unmodified static baseline; "
+                "house-upgrade effects will be applied in a later iteration."
+            ),
+        }
+
+    def _finalize_external_utility_flows(self):
+        """
+        Calculate residual externally supplied electricity after on-site
+        generation. Storage/export logic can replace this simple netting later.
+        """
+        flows = self.game_state["current_flows"]
+
+        demand = float(
+            flows.get("electricity_consumed_this_tick_kwh", 0.0)
+        )
+        generated = float(
+            flows.get("electricity_generated_this_tick_kwh", 0.0)
+        )
+
+        flows["grid_electricity_this_tick_kwh"] = max(
+            0.0,
+            demand - generated,
+        )
 
     def _advance_clock(self):
         time_state = self.game_state["time"]

@@ -1,0 +1,56 @@
+{
+  "profile_id": "default-gulf-coast-household",
+  "name": "Default Gulf Coast Household",
+  "description": "Baseline 4-person, approximately 1,900 sq ft, all-electric exurban U.S. household using annual-average daily consumption and waste flows.",
+  "occupants": 4,
+  "house_sq_ft": 1900,
+  "all_electric": true,
+  "seasonal_modeling": false,
+  "daily_flows": {
+    "groceries_usd": 40.0,
+    "kitchen_waste_lb": 2.0,
+    "tap_water_gal": 320.0,
+    "greywater_gal": 180.0,
+    "blackwater_gal": 60.0,
+    "other_water_use_gal": 80.0,
+    "recyclable_paper_lb": 1.6,
+    "recyclable_plastic_lb": 0.6,
+    "recyclable_glass_lb": 0.4,
+    "recyclable_metal_lb": 0.4,
+    "residual_nonfood_waste_lb": 4.0
+  },
+  "per_person_daily_reference": {
+    "groceries_usd": 10.0,
+    "kitchen_waste_lb": 0.5,
+    "tap_water_gal": 80.0,
+    "greywater_gal": 45.0,
+    "blackwater_gal": 15.0,
+    "other_water_use_gal": 20.0,
+    "recyclable_paper_lb": 0.4,
+    "recyclable_plastic_lb": 0.15,
+    "recyclable_glass_lb": 0.1,
+    "recyclable_metal_lb": 0.1,
+    "residual_nonfood_waste_lb": 1.0
+  },
+  "electricity_kwh_per_day": {
+    "hvac_cooling": 11.0,
+    "hvac_heating": 4.0,
+    "water_heating": 5.0,
+    "refrigeration_freezer": 2.0,
+    "cooking": 0.8,
+    "lighting": 1.8,
+    "laundry": 1.5,
+    "electronics_personal_plug_loads": 4.0,
+    "other_household_electrical_loads": 9.9,
+    "total": 40.0
+  },
+  "model_notes": {
+    "greywater_definition": "All non-sewage wastewater generated inside the house.",
+    "blackwater_definition": "Toilet/sewage wastewater.",
+    "wastewater_combined_in_default_house": true,
+    "kitchen_waste_is_undifferentiated": true,
+    "electricity_values_are_static_for_now": true,
+    "electricity_is_annual_average_daily_equivalent": true,
+    "heating_and_cooling_are_not_literal_same_day_operation": true
+  }
+}
