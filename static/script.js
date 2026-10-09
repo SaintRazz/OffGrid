@@ -828,6 +828,206 @@ if (landGrid) {
   }
 
   // ============================================================
+  // Household profile displays
+  // ============================================================
+
+  function addListItem(list, label, value) {
+    const item = document.createElement("li");
+    item.textContent = `${label}: ${value}`;
+    list.appendChild(item);
+  }
+
+  function dailyHouseholdBaseline() {
+    const stateBaseline =
+      simulationState?.household_baseline_daily ?? {};
+
+    const profile =
+      simulationState?.household_profile ?? {};
+
+    return {
+      dailyFlows:
+        stateBaseline.daily_flows ??
+        profile.daily_flows ??
+        {},
+
+      electricity:
+        stateBaseline.electricity_kwh_per_day ??
+        profile.electricity_kwh_per_day ??
+        {},
+    };
+  }
+
+  function renderHouseholdSummary() {
+    const list =
+      document.getElementById("household-summary-list");
+
+    if (!list) {
+      return;
+    }
+
+    list.replaceChildren();
+
+    const profile =
+      simulationState?.household_profile;
+
+    if (!profile) {
+      addListItem(list, "Household profile", "Unavailable");
+      return;
+    }
+
+    addListItem(
+      list,
+      "Profile",
+      profile.name ?? profile.profile_id ?? "Default household"
+    );
+
+    addListItem(
+      list,
+      "Occupants",
+      formatAmount(profile.occupants ?? 0)
+    );
+
+    addListItem(
+      list,
+      "House size",
+      `${formatAmount(profile.house_sq_ft ?? 0)} sq ft`
+    );
+
+    addListItem(
+      list,
+      "Electrical system",
+      profile.all_electric ? "All-electric" : "Mixed"
+    );
+
+    addListItem(
+      list,
+      "Seasonal model",
+      profile.seasonal_modeling ? "Enabled" : "Annual-average daily values"
+    );
+  }
+
+  function renderConsumption() {
+    const consumptionList =
+      document.getElementById("consumption-list");
+
+    const electricityList =
+      document.getElementById("electricity-breakdown-list");
+
+    if (!consumptionList || !electricityList) {
+      return;
+    }
+
+    consumptionList.replaceChildren();
+    electricityList.replaceChildren();
+
+    const baseline = dailyHouseholdBaseline();
+    const flows = baseline.dailyFlows;
+    const electricity = baseline.electricity;
+
+    addListItem(
+      consumptionList,
+      "Groceries",
+      `$${formatAmount(flows.groceries_usd ?? 0)} / day`
+    );
+
+    addListItem(
+      consumptionList,
+      "Tap water",
+      `${formatAmount(flows.tap_water_gal ?? 0)} gal / day`
+    );
+
+    addListItem(
+      consumptionList,
+      "Electricity",
+      `${formatAmount(electricity.total ?? 0)} kWh / day`
+    );
+
+    const endUses = [
+      ["HVAC cooling", "hvac_cooling"],
+      ["HVAC heating", "hvac_heating"],
+      ["Water heating", "water_heating"],
+      ["Refrigeration / freezer", "refrigeration_freezer"],
+      ["Cooking", "cooking"],
+      ["Lighting", "lighting"],
+      ["Laundry", "laundry"],
+      [
+        "Electronics / personal plug loads",
+        "electronics_personal_plug_loads",
+      ],
+      [
+        "Other household electrical loads",
+        "other_household_electrical_loads",
+      ],
+    ];
+
+    endUses.forEach(([label, key]) => {
+      if (electricity[key] == null) {
+        return;
+      }
+
+      addListItem(
+        electricityList,
+        label,
+        `${formatAmount(electricity[key])} kWh / day`
+      );
+    });
+  }
+
+  function renderWasteWater() {
+    const list =
+      document.getElementById("waste-water-list");
+
+    if (!list) {
+      return;
+    }
+
+    list.replaceChildren();
+
+    const { dailyFlows: flows } =
+      dailyHouseholdBaseline();
+
+    const rows = [
+      ["Greywater", "greywater_gal", "gal / day"],
+      ["Blackwater", "blackwater_gal", "gal / day"],
+      ["Other water use", "other_water_use_gal", "gal / day"],
+      ["Kitchen waste", "kitchen_waste_lb", "lb / day"],
+      [
+        "Recyclable paper / cardboard",
+        "recyclable_paper_lb",
+        "lb / day",
+      ],
+      ["Recyclable plastic", "recyclable_plastic_lb", "lb / day"],
+      ["Recyclable glass", "recyclable_glass_lb", "lb / day"],
+      ["Recyclable metal", "recyclable_metal_lb", "lb / day"],
+      [
+        "Residual non-food waste",
+        "residual_nonfood_waste_lb",
+        "lb / day",
+      ],
+    ];
+
+    rows.forEach(([label, key, unit]) => {
+      addListItem(
+        list,
+        label,
+        `${formatAmount(flows[key] ?? 0)} ${unit}`
+      );
+    });
+
+    const greywater =
+      Number(flows.greywater_gal ?? 0);
+
+    const blackwater =
+      Number(flows.blackwater_gal ?? 0);
+
+    addListItem(
+      list,
+      "Total wastewater",
+      `${formatAmount(greywater + blackwater)} gal / day`
+    );
+  }
+
+  // ============================================================
   // Resource display
   // ============================================================
 
@@ -1191,6 +1391,9 @@ if (landGrid) {
         .current_time
     );
 
+    renderHouseholdSummary();
+    renderConsumption();
+    renderWasteWater();
     renderResources();
     renderOperations();
   }

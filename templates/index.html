@@ -53,17 +53,27 @@
           <div class="tab-panels">
             <section id="household-panel" class="info-panel is-active">
               <h3>Household</h3>
-              <ul><li>Occupants: 4</li></ul>
+              <ul id="household-summary-list" aria-live="polite">
+                <li>No game loaded.</li>
+              </ul>
             </section>
 
             <section id="consumption-panel" class="info-panel" hidden>
               <h3>Consumption</h3>
-              <p class="panel-note">Household consumption totals will be shown here from simulation data rather than fixed placeholder rates.</p>
+              <p class="panel-note">Annual-average daily household baseline.</p>
+              <ul id="consumption-list" aria-live="polite">
+                <li>No game loaded.</li>
+              </ul>
+              <h4>Electricity by end use</h4>
+              <ul id="electricity-breakdown-list" aria-live="polite"></ul>
             </section>
 
             <section id="waste-water-panel" class="info-panel" hidden>
               <h3>Waste + Water</h3>
-              <p class="panel-note">Water use, recovered water, and material residuals will be summarized here as those systems are modeled.</p>
+              <p class="panel-note">Annual-average daily household outputs and wastewater flows.</p>
+              <ul id="waste-water-list" aria-live="polite">
+                <li>No game loaded.</li>
+              </ul>
             </section>
 
             <section id="resources-panel" class="info-panel" hidden>
