@@ -31,10 +31,34 @@ if (landGrid) {
   const inspectorContent = document.getElementById("object-inspector-content");
   const inspectorCloseButton = document.getElementById("object-inspector-close");
 
+  const mapViewport = document.getElementById("map-viewport");
+  const zoomInButton = document.getElementById("zoom-in");
+  const zoomOutButton = document.getElementById("zoom-out");
+  const zoomResetButton = document.getElementById("zoom-reset");
+  const zoomLevel = document.getElementById("zoom-level");
+
   let selectedId = null;
   let hoverPosition = null;
   let preview = null;
   let simulationState = null;
+
+  const MIN_ZOOM = 1;
+  const MAX_ZOOM = 4;
+  const ZOOM_STEP = 0.25;
+  const DRAG_THRESHOLD_PX = 5;
+
+  let mapZoom = 1;
+  let mapPanX = 0;
+  let mapPanY = 0;
+
+  let mapPointerDown = false;
+  let mapPointerId = null;
+  let mapDragStarted = false;
+  let dragStartX = 0;
+  let dragStartY = 0;
+  let dragStartPanX = 0;
+  let dragStartPanY = 0;
+  let suppressNextMapClick = false;
 
   // ============================================================
   // Map grid
@@ -189,6 +213,348 @@ if (landGrid) {
   }
 
   // ============================================================
+  // Map navigation
+  // ============================================================
+
+  function clamp(value, minimum, maximum) {
+    return Math.min(
+      maximum,
+      Math.max(minimum, value)
+    );
+  }
+
+  function clampMapPan(
+    panX = mapPanX,
+    panY = mapPanY,
+    zoom = mapZoom
+  ) {
+    const viewportWidth =
+      mapViewport.clientWidth;
+
+    const viewportHeight =
+      mapViewport.clientHeight;
+
+    const contentWidth =
+      landGrid.offsetWidth * zoom;
+
+    const contentHeight =
+      landGrid.offsetHeight * zoom;
+
+    const minimumX =
+      Math.min(
+        0,
+        viewportWidth - contentWidth
+      );
+
+    const minimumY =
+      Math.min(
+        0,
+        viewportHeight - contentHeight
+      );
+
+    return {
+      x: clamp(
+        panX,
+        minimumX,
+        0
+      ),
+
+      y: clamp(
+        panY,
+        minimumY,
+        0
+      ),
+    };
+  }
+
+  function renderMapTransform() {
+    const clamped =
+      clampMapPan();
+
+    mapPanX = clamped.x;
+    mapPanY = clamped.y;
+
+    landGrid.style.transform =
+      `translate(${mapPanX}px, ${mapPanY}px) ` +
+      `scale(${mapZoom})`;
+
+    zoomLevel.textContent =
+      `${Math.round(mapZoom * 100)}%`;
+
+    mapViewport.classList.toggle(
+      "is-zoomed",
+      mapZoom > 1
+    );
+
+    zoomOutButton.disabled =
+      mapZoom <= MIN_ZOOM;
+
+    zoomInButton.disabled =
+      mapZoom >= MAX_ZOOM;
+  }
+
+  function setMapZoom(
+    requestedZoom,
+    focalClientX = null,
+    focalClientY = null
+  ) {
+    const newZoom =
+      clamp(
+        requestedZoom,
+        MIN_ZOOM,
+        MAX_ZOOM
+      );
+
+    if (newZoom === mapZoom) {
+      return;
+    }
+
+    const viewportRect =
+      mapViewport.getBoundingClientRect();
+
+    const focalX =
+      focalClientX == null
+        ? viewportRect.width / 2
+        : focalClientX -
+          viewportRect.left;
+
+    const focalY =
+      focalClientY == null
+        ? viewportRect.height / 2
+        : focalClientY -
+          viewportRect.top;
+
+    /*
+     * Find the map-space point currently under the cursor, then
+     * calculate the new pan so that same point stays under it.
+     */
+    const mapX =
+      (focalX - mapPanX) /
+      mapZoom;
+
+    const mapY =
+      (focalY - mapPanY) /
+      mapZoom;
+
+    mapPanX =
+      focalX -
+      mapX * newZoom;
+
+    mapPanY =
+      focalY -
+      mapY * newZoom;
+
+    mapZoom = newZoom;
+
+    renderMapTransform();
+  }
+
+  function resetMapView() {
+    mapZoom = 1;
+    mapPanX = 0;
+    mapPanY = 0;
+    renderMapTransform();
+  }
+
+  function zoomMapBy(
+    delta,
+    focalClientX = null,
+    focalClientY = null
+  ) {
+    setMapZoom(
+      mapZoom + delta,
+      focalClientX,
+      focalClientY
+    );
+  }
+
+  mapViewport.addEventListener(
+    "wheel",
+    (event) => {
+      event.preventDefault();
+
+      const direction =
+        event.deltaY < 0
+          ? ZOOM_STEP
+          : -ZOOM_STEP;
+
+      zoomMapBy(
+        direction,
+        event.clientX,
+        event.clientY
+      );
+    },
+    {
+      passive: false,
+    }
+  );
+
+  zoomInButton.addEventListener(
+    "click",
+    () => {
+      zoomMapBy(ZOOM_STEP);
+    }
+  );
+
+  zoomOutButton.addEventListener(
+    "click",
+    () => {
+      zoomMapBy(-ZOOM_STEP);
+    }
+  );
+
+  zoomResetButton.addEventListener(
+    "click",
+    resetMapView
+  );
+
+  /*
+   * Important:
+   * We do NOT capture the pointer here.
+   *
+   * A normal mouse-down / mouse-up should remain a normal click
+   * so the underlying tile or facility can still be selected.
+   *
+   * Pointer capture begins only after movement exceeds the drag
+   * threshold in the pointermove handler below.
+   */
+  mapViewport.addEventListener(
+    "pointerdown",
+    (event) => {
+      if (
+        event.button !== 0 ||
+        selectedId ||
+        mapZoom <= 1
+      ) {
+        return;
+      }
+
+      mapPointerDown = true;
+      mapPointerId = event.pointerId;
+      mapDragStarted = false;
+
+      dragStartX = event.clientX;
+      dragStartY = event.clientY;
+      dragStartPanX = mapPanX;
+      dragStartPanY = mapPanY;
+    }
+  );
+
+  mapViewport.addEventListener(
+    "pointermove",
+    (event) => {
+      if (
+        !mapPointerDown ||
+        event.pointerId !==
+          mapPointerId
+      ) {
+        return;
+      }
+
+      const deltaX =
+        event.clientX -
+        dragStartX;
+
+      const deltaY =
+        event.clientY -
+        dragStartY;
+
+      if (!mapDragStarted) {
+        const distance =
+          Math.hypot(
+            deltaX,
+            deltaY
+          );
+
+        if (
+          distance <
+          DRAG_THRESHOLD_PX
+        ) {
+          return;
+        }
+
+        mapDragStarted = true;
+
+        /*
+         * Only capture after we've established that this gesture
+         * is actually a drag rather than an ordinary click.
+         */
+        mapViewport.setPointerCapture(
+          event.pointerId
+        );
+
+        mapViewport.classList.add(
+          "is-dragging"
+        );
+
+        clearMapSelection();
+      }
+
+      event.preventDefault();
+
+      const clamped =
+        clampMapPan(
+          dragStartPanX +
+            deltaX,
+          dragStartPanY +
+            deltaY
+        );
+
+      mapPanX = clamped.x;
+      mapPanY = clamped.y;
+
+      renderMapTransform();
+    }
+  );
+
+  function finishMapDrag(event) {
+    if (
+      !mapPointerDown ||
+      event.pointerId !==
+        mapPointerId
+    ) {
+      return;
+    }
+
+    if (mapDragStarted) {
+      suppressNextMapClick = true;
+    }
+
+    mapPointerDown = false;
+    mapPointerId = null;
+    mapDragStarted = false;
+
+    mapViewport.classList.remove(
+      "is-dragging"
+    );
+
+    if (
+      mapViewport.hasPointerCapture(
+        event.pointerId
+      )
+    ) {
+      mapViewport.releasePointerCapture(
+        event.pointerId
+      );
+    }
+  }
+
+  mapViewport.addEventListener(
+    "pointerup",
+    finishMapDrag
+  );
+
+  mapViewport.addEventListener(
+    "pointercancel",
+    finishMapDrag
+  );
+
+  window.addEventListener(
+    "resize",
+    renderMapTransform
+  );
+
+  // ============================================================
   // Placement helpers
   // ============================================================
 
@@ -324,7 +690,8 @@ if (landGrid) {
 
     list.replaceChildren();
 
-    const profile = simulationState?.household_profile;
+    const profile =
+      simulationState?.household_profile;
 
     if (!profile) {
       addListItem(
@@ -381,16 +748,24 @@ if (landGrid) {
         "electricity-breakdown-list"
       );
 
-    if (!consumptionList || !electricityList) {
+    if (
+      !consumptionList ||
+      !electricityList
+    ) {
       return;
     }
 
     consumptionList.replaceChildren();
     electricityList.replaceChildren();
 
-    const baseline = dailyHouseholdBaseline();
-    const flows = baseline.dailyFlows;
-    const electricity = baseline.electricity;
+    const baseline =
+      dailyHouseholdBaseline();
+
+    const flows =
+      baseline.dailyFlows;
+
+    const electricity =
+      baseline.electricity;
 
     addListItem(
       consumptionList,
@@ -417,16 +792,34 @@ if (landGrid) {
     );
 
     const endUses = [
-      ["HVAC cooling", "hvac_cooling"],
-      ["HVAC heating", "hvac_heating"],
-      ["Water heating", "water_heating"],
+      [
+        "HVAC cooling",
+        "hvac_cooling",
+      ],
+      [
+        "HVAC heating",
+        "hvac_heating",
+      ],
+      [
+        "Water heating",
+        "water_heating",
+      ],
       [
         "Refrigeration / freezer",
         "refrigeration_freezer",
       ],
-      ["Cooking", "cooking"],
-      ["Lighting", "lighting"],
-      ["Laundry", "laundry"],
+      [
+        "Cooking",
+        "cooking",
+      ],
+      [
+        "Lighting",
+        "lighting",
+      ],
+      [
+        "Laundry",
+        "laundry",
+      ],
       [
         "Electronics / personal plug loads",
         "electronics_personal_plug_loads",
@@ -437,24 +830,30 @@ if (landGrid) {
       ],
     ];
 
-    endUses.forEach(([label, key]) => {
-      if (electricity[key] == null) {
-        return;
-      }
+    endUses.forEach(
+      ([label, key]) => {
+        if (
+          electricity[key] == null
+        ) {
+          return;
+        }
 
-      addListItem(
-        electricityList,
-        label,
-        `${formatAmount(
-          electricity[key]
-        )} kWh / day`
-      );
-    });
+        addListItem(
+          electricityList,
+          label,
+          `${formatAmount(
+            electricity[key]
+          )} kWh / day`
+        );
+      }
+    );
   }
 
   function renderWasteWater() {
     const list =
-      document.getElementById("waste-water-list");
+      document.getElementById(
+        "waste-water-list"
+      );
 
     if (!list) {
       return;
@@ -462,12 +861,22 @@ if (landGrid) {
 
     list.replaceChildren();
 
-    const { dailyFlows: flows } =
+    const {
+      dailyFlows: flows,
+    } =
       dailyHouseholdBaseline();
 
     const rows = [
-      ["Greywater", "greywater_gal", "gal / day"],
-      ["Blackwater", "blackwater_gal", "gal / day"],
+      [
+        "Greywater",
+        "greywater_gal",
+        "gal / day",
+      ],
+      [
+        "Blackwater",
+        "blackwater_gal",
+        "gal / day",
+      ],
       [
         "Other water use",
         "other_water_use_gal",
@@ -505,21 +914,27 @@ if (landGrid) {
       ],
     ];
 
-    rows.forEach(([label, key, unit]) => {
-      addListItem(
-        list,
-        label,
-        `${formatAmount(
-          flows[key] ?? 0
-        )} ${unit}`
-      );
-    });
+    rows.forEach(
+      ([label, key, unit]) => {
+        addListItem(
+          list,
+          label,
+          `${formatAmount(
+            flows[key] ?? 0
+          )} ${unit}`
+        );
+      }
+    );
 
     const greywater =
-      Number(flows.greywater_gal ?? 0);
+      Number(
+        flows.greywater_gal ?? 0
+      );
 
     const blackwater =
-      Number(flows.blackwater_gal ?? 0);
+      Number(
+        flows.blackwater_gal ?? 0
+      );
 
     addListItem(
       list,
@@ -536,7 +951,9 @@ if (landGrid) {
 
   function clearMapSelection() {
     landGrid
-      .querySelectorAll(".is-map-selected")
+      .querySelectorAll(
+        ".is-map-selected"
+      )
       .forEach((element) => {
         element.classList.remove(
           "is-map-selected"
@@ -544,7 +961,10 @@ if (landGrid) {
       });
   }
 
-  function markSelectedTile(column, row) {
+  function markSelectedTile(
+    column,
+    row
+  ) {
     clearMapSelection();
 
     const cell =
@@ -552,10 +972,14 @@ if (landGrid) {
         `.grid-cell[data-column="${column}"][data-row="${row}"]`
       );
 
-    cell?.classList.add("is-map-selected");
+    cell?.classList.add(
+      "is-map-selected"
+    );
   }
 
-  function markSelectedInstance(instanceId) {
+  function markSelectedInstance(
+    instanceId
+  ) {
     clearMapSelection();
 
     const sprite =
@@ -563,16 +987,23 @@ if (landGrid) {
         `.placed-building[data-instance-id="${instanceId}"]`
       );
 
-    sprite?.classList.add("is-map-selected");
+    sprite?.classList.add(
+      "is-map-selected"
+    );
   }
 
-  function makeInspectorSection(title, rows) {
+  function makeInspectorSection(
+    title,
+    rows
+  ) {
     if (!rows.length) {
       return null;
     }
 
     const section =
-      document.createElement("section");
+      document.createElement(
+        "section"
+      );
 
     section.className =
       "object-inspector-section";
@@ -580,8 +1011,12 @@ if (landGrid) {
     const heading =
       document.createElement("h3");
 
-    heading.textContent = title;
-    section.appendChild(heading);
+    heading.textContent =
+      title;
+
+    section.appendChild(
+      heading
+    );
 
     const list =
       document.createElement("dl");
@@ -589,21 +1024,37 @@ if (landGrid) {
     list.className =
       "object-inspector-stats";
 
-    rows.forEach(([label, value]) => {
-      const term =
-        document.createElement("dt");
+    rows.forEach(
+      ([label, value]) => {
+        const term =
+          document.createElement(
+            "dt"
+          );
 
-      const detail =
-        document.createElement("dd");
+        const detail =
+          document.createElement(
+            "dd"
+          );
 
-      term.textContent = label;
-      detail.textContent =
-        String(value ?? "—");
+        term.textContent =
+          label;
 
-      list.append(term, detail);
-    });
+        detail.textContent =
+          String(
+            value ?? "—"
+          );
 
-    section.appendChild(list);
+        list.append(
+          term,
+          detail
+        );
+      }
+    );
+
+    section.appendChild(
+      list
+    );
+
     return section;
   }
 
@@ -615,43 +1066,71 @@ if (landGrid) {
     stateRows = [],
     operationRows = [],
   }) {
-    inspectorTitle.textContent = title;
-    inspectorSubtitle.textContent = subtitle;
+    inspectorTitle.textContent =
+      title;
+
+    inspectorSubtitle.textContent =
+      subtitle;
+
     inspectorContent.replaceChildren();
 
     [
-      ["General", genericRows],
-      ["Rates", rateRows],
-      ["Current status", stateRows],
-      ["Current operation", operationRows],
-    ].forEach(([sectionTitle, rows]) => {
-      const section =
-        makeInspectorSection(
-          sectionTitle,
-          rows
-        );
+      [
+        "General",
+        genericRows,
+      ],
+      [
+        "Rates",
+        rateRows,
+      ],
+      [
+        "Current status",
+        stateRows,
+      ],
+      [
+        "Current operation",
+        operationRows,
+      ],
+    ].forEach(
+      ([sectionTitle, rows]) => {
+        const section =
+          makeInspectorSection(
+            sectionTitle,
+            rows
+          );
 
-      if (section) {
-        inspectorContent.appendChild(section);
+        if (section) {
+          inspectorContent.appendChild(
+            section
+          );
+        }
       }
-    });
+    );
 
-    inspectorOverlay.hidden = false;
+    inspectorOverlay.hidden =
+      false;
+
     inspectorCloseButton.focus();
   }
 
   function closeInspector() {
-    inspectorOverlay.hidden = true;
+    inspectorOverlay.hidden =
+      true;
+
     clearMapSelection();
   }
 
-  function inspectFacility(instanceId) {
+  function inspectFacility(
+    instanceId
+  ) {
     const instance =
-      simulationState?.instances?.find(
-        (candidate) =>
-          candidate.instance_id ===
-          instanceId
-      );
+      simulationState
+        ?.instances
+        ?.find(
+          (candidate) =>
+            candidate.instance_id ===
+            instanceId
+        );
 
     if (!instance) {
       return;
@@ -671,7 +1150,9 @@ if (landGrid) {
     );
 
     const condition =
-      Number(instance.condition ?? 1);
+      Number(
+        instance.condition ?? 1
+      );
 
     const stateRows = [
       [
@@ -703,7 +1184,8 @@ if (landGrid) {
     ];
 
     const container =
-      definition.container ?? null;
+      definition.container ??
+      null;
 
     if (container) {
       const capacity =
@@ -714,7 +1196,9 @@ if (landGrid) {
         container.capacity_unit ??
         "";
 
-      if (capacity != null) {
+      if (
+        capacity != null
+      ) {
         stateRows.push([
           "Capacity",
           `${formatAmount(
@@ -723,7 +1207,9 @@ if (landGrid) {
         ]);
       }
 
-      if (instance.current_fill != null) {
+      if (
+        instance.current_fill != null
+      ) {
         stateRows.push([
           "Current fill",
           `${formatAmount(
@@ -734,18 +1220,28 @@ if (landGrid) {
     }
 
     const processStates =
-      definition.process?.process_states ?? [];
+      definition
+        .process
+        ?.process_states ??
+      [];
 
-    processStates.forEach((stateName) => {
-      if (instance[stateName] != null) {
-        stateRows.push([
-          prettyName(stateName),
-          formatInspectorValue(
-            instance[stateName]
-          ),
-        ]);
+    processStates.forEach(
+      (stateName) => {
+        if (
+          instance[stateName] !=
+          null
+        ) {
+          stateRows.push([
+            prettyName(
+              stateName
+            ),
+            formatInspectorValue(
+              instance[stateName]
+            ),
+          ]);
+        }
       }
-    });
+    );
 
     const operationRows =
       instance.last_operation
@@ -760,50 +1256,73 @@ if (landGrid) {
           ];
 
     openInspector({
-      title: definition.name,
+      title:
+        definition.name,
+
       subtitle:
         `${instance.width * 5} × ` +
         `${instance.height * 5} ft facility`,
+
       genericRows:
         genericDefinitionRows(
           definition
         ),
+
       rateRows:
-        extractRates(definition),
+        extractRates(
+          definition
+        ),
+
       stateRows,
       operationRows,
     });
   }
 
-  function inspectDefaultTile(column, row) {
+  function inspectDefaultTile(
+    column,
+    row
+  ) {
     const defaultTileId =
-      simulationState?.map?.default_tile ??
+      simulationState
+        ?.map
+        ?.default_tile ??
       "grass-tile";
 
     const definition =
-      definitionsById.get(defaultTileId);
+      definitionsById.get(
+        defaultTileId
+      );
 
     if (!definition) {
       return;
     }
 
-    markSelectedTile(column, row);
+    markSelectedTile(
+      column,
+      row
+    );
 
     const tileState =
-      simulationState?.tile_states?.find(
-        (tile) => {
-          const tileColumn =
-            tile.column ?? tile.x;
+      simulationState
+        ?.tile_states
+        ?.find(
+          (tile) => {
+            const tileColumn =
+              tile.column ??
+              tile.x;
 
-          const tileRow =
-            tile.row ?? tile.y;
+            const tileRow =
+              tile.row ??
+              tile.y;
 
-          return (
-            tileColumn === column &&
-            tileRow === row
-          );
-        }
-      );
+            return (
+              tileColumn ===
+                column &&
+              tileRow ===
+                row
+            );
+          }
+        );
 
     const stateRows = [
       [
@@ -823,7 +1342,9 @@ if (landGrid) {
     ];
 
     if (tileState) {
-      flattenObject(tileState)
+      flattenObject(
+        tileState
+      )
         .filter(
           ([label]) =>
             ![
@@ -832,26 +1353,41 @@ if (landGrid) {
               "X",
               "Y",
               "Type",
-            ].includes(label)
+            ].includes(
+              label
+            )
         )
-        .forEach((rowValue) => {
-          stateRows.push(rowValue);
-        });
+        .forEach(
+          (rowValue) => {
+            stateRows.push(
+              rowValue
+            );
+          }
+        );
     }
 
     openInspector({
       title:
         definition.name ??
-        prettyName(defaultTileId),
+        prettyName(
+          defaultTileId
+        ),
+
       subtitle:
         `5 × 5 ft tile · row ${row + 1}, column ${column + 1}`,
+
       genericRows:
         genericDefinitionRows(
           definition
         ),
+
       rateRows:
-        extractRates(definition),
+        extractRates(
+          definition
+        ),
+
       stateRows,
+
       operationRows: [
         [
           "Status",
@@ -861,19 +1397,24 @@ if (landGrid) {
     });
   }
 
-  inspectorCloseButton.addEventListener(
-    "click",
-    closeInspector
-  );
+  inspectorCloseButton
+    .addEventListener(
+      "click",
+      closeInspector
+    );
 
-  inspectorOverlay.addEventListener(
-    "click",
-    (event) => {
-      if (event.target === inspectorOverlay) {
-        closeInspector();
+  inspectorOverlay
+    .addEventListener(
+      "click",
+      (event) => {
+        if (
+          event.target ===
+          inspectorOverlay
+        ) {
+          closeInspector();
+        }
       }
-    }
-  );
+    );
 
   // ============================================================
   // Resource display
@@ -888,14 +1429,18 @@ if (landGrid) {
     resourceList.replaceChildren();
 
     Object.entries(
-      simulationState?.resources ?? {}
+      simulationState
+        ?.resources ??
+      {}
     ).forEach(
       ([
         resourceId,
         resource,
       ]) => {
         const item =
-          document.createElement("li");
+          document.createElement(
+            "li"
+          );
 
         item.textContent =
           `${resource.name}: ` +
@@ -903,32 +1448,46 @@ if (landGrid) {
             resource.amount
           )} ${resource.unit}`;
 
-        resourceList.appendChild(item);
+        resourceList.appendChild(
+          item
+        );
       }
     );
   }
 
-  function formatFlows(flows = {}) {
-    return Object.entries(flows ?? {})
-      .map(([resourceId, amount]) => {
-        const resource =
-          simulationState?.resources?.[
-            resourceId
-          ];
+  function formatFlows(
+    flows = {}
+  ) {
+    return Object.entries(
+      flows ?? {}
+    )
+      .map(
+        ([
+          resourceId,
+          amount,
+        ]) => {
+          const resource =
+            simulationState
+              ?.resources
+              ?.[resourceId];
 
-        if (!resource) {
+          if (!resource) {
+            return (
+              `${formatAmount(
+                amount
+              )} ${resourceId}`
+            );
+          }
+
           return (
-            `${formatAmount(amount)} ` +
-            `${resourceId}`
+            `${formatAmount(
+              amount
+            )} ` +
+            `${resource.unit} ` +
+            `${resource.name.toLowerCase()}`
           );
         }
-
-        return (
-          `${formatAmount(amount)} ` +
-          `${resource.unit} ` +
-          `${resource.name.toLowerCase()}`
-        );
-      })
+      )
       .join(", ");
   }
 
@@ -944,155 +1503,197 @@ if (landGrid) {
 
     list.replaceChildren();
 
-    if (!simulationState?.instances?.length) {
+    if (
+      !simulationState
+        ?.instances
+        ?.length
+    ) {
       const item =
-        document.createElement("li");
+        document.createElement(
+          "li"
+        );
 
       item.textContent =
         "No facilities placed.";
 
-      list.appendChild(item);
+      list.appendChild(
+        item
+      );
+
       return;
     }
 
-    simulationState.instances.forEach(
-      (instance) => {
-        const definition =
-          definitionsById.get(
-            instance.facility_id
+    simulationState.instances
+      .forEach(
+        (instance) => {
+          const definition =
+            definitionsById.get(
+              instance.facility_id
+            );
+
+          const item =
+            document.createElement(
+              "li"
+            );
+
+          const heading =
+            document.createElement(
+              "strong"
+            );
+
+          heading.textContent =
+            `${definition?.name ??
+              instance.facility_id} · ` +
+            `${instance.instance_id}`;
+
+          item.appendChild(
+            heading
           );
 
-        const item =
-          document.createElement("li");
-
-        const heading =
-          document.createElement("strong");
-
-        heading.textContent =
-          `${definition?.name ??
-            instance.facility_id} · ` +
-          `${instance.instance_id}`;
-
-        item.appendChild(heading);
-
-        const detail =
-          document.createElement("span");
-
-        const operation =
-          instance.last_operation;
-
-        if (!operation) {
-          detail.textContent =
-            `Tile ${instance.row + 1}, ` +
-            `${instance.column + 1} · ` +
-            "awaiting first tick";
-        } else {
-          const consumed =
-            operation.consumed ?? {};
-
-          const produced =
-            operation.produced ?? {};
-
-          const flows = [];
-
-          if (Object.keys(consumed).length) {
-            flows.push(
-              `used ${formatFlows(
-                consumed
-              )}`
+          const detail =
+            document.createElement(
+              "span"
             );
-          }
 
-          if (Object.keys(produced).length) {
-            flows.push(
-              `made ${formatFlows(
-                produced
-              )}`
-            );
-          }
+          const operation =
+            instance.last_operation;
 
-          let statusText;
-
-          if (
-            operation.status ===
-            "operating"
-          ) {
-            statusText =
-              operation.utilization_pct != null
-                ? `Operating ${operation.utilization_pct}%`
-                : "Operating";
-          } else if (
-            operation.status ===
-            "collecting"
-          ) {
-            statusText = "Collecting";
-          } else if (
-            operation.status ===
-            "full"
-          ) {
-            statusText = "Full";
-          } else if (
-            operation.status ===
-            "error"
-          ) {
-            statusText =
-              `Error: ${
-                operation.reason ??
-                "unknown error"
-              }`;
+          if (!operation) {
+            detail.textContent =
+              `Tile ${instance.row + 1}, ` +
+              `${instance.column + 1} · ` +
+              "awaiting first tick";
           } else {
-            statusText =
-              `Idle${
-                operation.reason
-                  ? `: ${operation.reason}`
-                  : ""
-              }`;
-          }
+            const consumed =
+              operation.consumed ??
+              {};
 
-          let laborText = "";
+            const produced =
+              operation.produced ??
+              {};
 
-          if (
-            operation.labor_used != null
-          ) {
-            laborText =
-              ` · ${formatAmount(
-                operation.labor_used
-              )} labor h`;
-          } else if (
-            operation
-              .accrued_labor_requirement !=
-            null
-          ) {
-            laborText =
-              ` · ${formatAmount(
+            const flows = [];
+
+            if (
+              Object.keys(
+                consumed
+              ).length
+            ) {
+              flows.push(
+                `used ${formatFlows(
+                  consumed
+                )}`
+              );
+            }
+
+            if (
+              Object.keys(
+                produced
+              ).length
+            ) {
+              flows.push(
+                `made ${formatFlows(
+                  produced
+                )}`
+              );
+            }
+
+            let statusText;
+
+            if (
+              operation.status ===
+              "operating"
+            ) {
+              statusText =
                 operation
-                  .accrued_labor_requirement
-              )} labor h accrued`;
+                  .utilization_pct !=
+                null
+                  ? `Operating ${operation.utilization_pct}%`
+                  : "Operating";
+            } else if (
+              operation.status ===
+              "collecting"
+            ) {
+              statusText =
+                "Collecting";
+            } else if (
+              operation.status ===
+              "full"
+            ) {
+              statusText =
+                "Full";
+            } else if (
+              operation.status ===
+              "error"
+            ) {
+              statusText =
+                `Error: ${
+                  operation.reason ??
+                  "unknown error"
+                }`;
+            } else {
+              statusText =
+                `Idle${
+                  operation.reason
+                    ? `: ${operation.reason}`
+                    : ""
+                }`;
+            }
+
+            let laborText =
+              "";
+
+            if (
+              operation
+                .labor_used !=
+              null
+            ) {
+              laborText =
+                ` · ${formatAmount(
+                  operation.labor_used
+                )} labor h`;
+            } else if (
+              operation
+                .accrued_labor_requirement !=
+              null
+            ) {
+              laborText =
+                ` · ${formatAmount(
+                  operation
+                    .accrued_labor_requirement
+                )} labor h accrued`;
+            }
+
+            detail.textContent =
+              `Tile ${instance.row + 1}, ` +
+              `${instance.column + 1} · ` +
+              `${statusText}` +
+              laborText +
+              (
+                flows.length
+                  ? ` · ${flows.join("; ")}`
+                  : ""
+              );
           }
 
-          detail.textContent =
-            `Tile ${instance.row + 1}, ` +
-            `${instance.column + 1} · ` +
-            `${statusText}` +
-            laborText +
-            (
-              flows.length
-                ? ` · ${flows.join("; ")}`
-                : ""
-            );
-        }
+          item.appendChild(
+            detail
+          );
 
-        item.appendChild(detail);
-        list.appendChild(item);
-      }
-    );
+          list.appendChild(
+            item
+          );
+        }
+      );
   }
 
   // ============================================================
   // Render placed facility
   // ============================================================
 
-  function renderInstance(instance) {
+  function renderInstance(
+    instance
+  ) {
     const definition =
       definitionsById.get(
         instance.facility_id
@@ -1103,7 +1704,9 @@ if (landGrid) {
     }
 
     const sprite =
-      document.createElement("img");
+      document.createElement(
+        "img"
+      );
 
     sprite.className =
       "building-sprite placed-building";
@@ -1119,6 +1722,9 @@ if (landGrid) {
       `${instance.width * 5} by ` +
       `${instance.height * 5} feet`;
 
+    sprite.draggable =
+      false;
+
     sprite.style.gridColumn =
       `${instance.column + 1} / ` +
       `span ${instance.width}`;
@@ -1127,8 +1733,13 @@ if (landGrid) {
       `${instance.row + 1} / ` +
       `span ${instance.height}`;
 
-    landGrid.appendChild(sprite);
-    placements.push(instance);
+    landGrid.appendChild(
+      sprite
+    );
+
+    placements.push(
+      instance
+    );
   }
 
   // ============================================================
@@ -1141,7 +1752,8 @@ if (landGrid) {
     }
 
     setDateAndClock(
-      simulationState.current_time
+      simulationState
+        .current_time
     );
 
     renderHouseholdSummary();
@@ -1160,12 +1772,16 @@ if (landGrid) {
     options = {}
   ) {
     const response =
-      await fetch(url, options);
+      await fetch(
+        url,
+        options
+      );
 
     let result;
 
     try {
-      result = await response.json();
+      result =
+        await response.json();
     } catch {
       throw new Error(
         `Server returned an invalid response (${response.status}).`
@@ -1186,105 +1802,147 @@ if (landGrid) {
   // Build menu
   // ============================================================
 
-  function createBuildOptions(definitions) {
+  function createBuildOptions(
+    definitions
+  ) {
     buildList.replaceChildren();
     definitionsById.clear();
 
-    definitions.forEach((definition) => {
-      definitionsById.set(
-        definition.id,
-        definition
-      );
+    definitions.forEach(
+      (definition) => {
+        definitionsById.set(
+          definition.id,
+          definition
+        );
 
-      const button =
-        document.createElement("button");
+        const button =
+          document.createElement(
+            "button"
+          );
 
-      button.className = "build-option";
-      button.type = "button";
-      button.dataset.building =
-        definition.id;
+        button.className =
+          "build-option";
 
-      button.setAttribute(
-        "aria-pressed",
-        "false"
-      );
+        button.type =
+          "button";
 
-      const image =
-        document.createElement("img");
+        button.dataset.building =
+          definition.id;
 
-      image.src =
-        `/static/assets/sprites/${definition.image}`;
+        button.setAttribute(
+          "aria-pressed",
+          "false"
+        );
 
-      image.alt = "";
+        const image =
+          document.createElement(
+            "img"
+          );
 
-      const label =
-        document.createElement("span");
+        image.src =
+          `/static/assets/sprites/${definition.image}`;
 
-      const name =
-        document.createElement("strong");
+        image.alt =
+          "";
 
-      name.textContent = definition.name;
+        const label =
+          document.createElement(
+            "span"
+          );
 
-      const size =
-        document.createElement("small");
+        const name =
+          document.createElement(
+            "strong"
+          );
 
-      size.textContent =
-        `${definition.width * 5} × ` +
-        `${definition.height * 5} ft`;
+        name.textContent =
+          definition.name;
 
-      label.append(name, size);
-      button.append(image, label);
-      buildList.appendChild(button);
-    });
+        const size =
+          document.createElement(
+            "small"
+          );
+
+        size.textContent =
+          `${definition.width * 5} × ` +
+          `${definition.height * 5} ft`;
+
+        label.append(
+          name,
+          size
+        );
+
+        button.append(
+          image,
+          label
+        );
+
+        buildList.appendChild(
+          button
+        );
+      }
+    );
 
     buildList
-      .querySelectorAll(".build-option")
-      .forEach((button) => {
-        button.addEventListener(
-          "click",
-          () => {
-            selectedId =
-              button.dataset.building;
+      .querySelectorAll(
+        ".build-option"
+      )
+      .forEach(
+        (button) => {
+          button.addEventListener(
+            "click",
+            () => {
+              selectedId =
+                button
+                  .dataset
+                  .building;
 
-            closeInspector();
+              closeInspector();
 
-            buildList
-              .querySelectorAll(
-                ".build-option"
-              )
-              .forEach((option) => {
-                option.setAttribute(
-                  "aria-pressed",
-                  String(
-                    option === button
-                  )
+              buildList
+                .querySelectorAll(
+                  ".build-option"
+                )
+                .forEach(
+                  (option) => {
+                    option.setAttribute(
+                      "aria-pressed",
+                      String(
+                        option ===
+                        button
+                      )
+                    );
+                  }
                 );
-              });
 
-            cancelButton.disabled =
-              false;
+              cancelButton.disabled =
+                false;
 
-            const building = footprint();
+              const building =
+                footprint();
 
-            if (!building) {
-              return;
+              if (!building) {
+                return;
+              }
+
+              status.textContent =
+                `${building.name} selected ` +
+                `(${building.width * 5} × ` +
+                `${building.height * 5} ft). ` +
+                "Click an open tile to place.";
+
+              if (
+                hoverPosition
+              ) {
+                showPreview(
+                  hoverPosition.column,
+                  hoverPosition.row
+                );
+              }
             }
-
-            status.textContent =
-              `${building.name} selected ` +
-              `(${building.width * 5} × ` +
-              `${building.height * 5} ft). ` +
-              "Click an open tile to place.";
-
-            if (hoverPosition) {
-              showPreview(
-                hoverPosition.column,
-                hoverPosition.row
-              );
-            }
-          }
-        );
-      });
+          );
+        }
+      );
   }
 
   // ============================================================
@@ -1304,15 +1962,20 @@ if (landGrid) {
       .querySelectorAll(
         ".placed-building"
       )
-      .forEach((sprite) => {
-        sprite.remove();
-      });
+      .forEach(
+        (sprite) => {
+          sprite.remove();
+        }
+      );
 
     buildList.replaceChildren();
     definitionsById.clear();
 
-    cancelButton.disabled = true;
-    tickButton.disabled = true;
+    cancelButton.disabled =
+      true;
+
+    tickButton.disabled =
+      true;
   }
 
   // ============================================================
@@ -1324,8 +1987,10 @@ if (landGrid) {
     gameName = "Current Game"
   ) {
     clearRenderedGame();
+    resetMapView();
 
-    simulationState = state;
+    simulationState =
+      state;
 
     currentGameName.textContent =
       gameName;
@@ -1337,13 +2002,20 @@ if (landGrid) {
     );
 
     (
-      simulationState.instances ?? []
-    ).forEach(renderInstance);
+      simulationState
+        .instances ??
+      []
+    ).forEach(
+      renderInstance
+    );
 
     renderState();
 
-    tickButton.disabled = false;
-    startupOverlay.hidden = true;
+    tickButton.disabled =
+      false;
+
+    startupOverlay.hidden =
+      true;
 
     status.textContent =
       "Click a map tile or facility to inspect it, or select a structure to build.";
@@ -1353,26 +2025,45 @@ if (landGrid) {
   // Startup controls
   // ============================================================
 
-  function setStartupBusy(isBusy) {
-    newGameButton.disabled = isBusy;
-    loadGameButton.disabled = isBusy;
-    backToStartButton.disabled = isBusy;
+  function setStartupBusy(
+    isBusy
+  ) {
+    newGameButton.disabled =
+      isBusy;
+
+    loadGameButton.disabled =
+      isBusy;
+
+    backToStartButton.disabled =
+      isBusy;
 
     saveGameList
-      .querySelectorAll("button")
-      .forEach((button) => {
-        button.disabled = isBusy;
-      });
+      .querySelectorAll(
+        "button"
+      )
+      .forEach(
+        (button) => {
+          button.disabled =
+            isBusy;
+        }
+      );
   }
 
   function showStartupMain() {
-    loadGamePanel.hidden = true;
-    startupMainActions.hidden = false;
-    startupStatus.textContent = "";
+    loadGamePanel.hidden =
+      true;
+
+    startupMainActions.hidden =
+      false;
+
+    startupStatus.textContent =
+      "";
   }
 
   async function startNewGame() {
-    setStartupBusy(true);
+    setStartupBusy(
+      true
+    );
 
     startupStatus.textContent =
       "Starting a new game...";
@@ -1395,38 +2086,55 @@ if (landGrid) {
       startupStatus.textContent =
         error.message;
     } finally {
-      setStartupBusy(false);
+      setStartupBusy(
+        false
+      );
     }
   }
 
-  function makeSaveButton(save) {
+  function makeSaveButton(
+    save
+  ) {
     const button =
-      document.createElement("button");
+      document.createElement(
+        "button"
+      );
 
-    button.type = "button";
+    button.type =
+      "button";
+
     button.className =
       "save-game-option";
 
     const title =
-      document.createElement("strong");
+      document.createElement(
+        "strong"
+      );
 
     title.textContent =
       save.label ||
       save.filename;
 
     const path =
-      document.createElement("small");
+      document.createElement(
+        "small"
+      );
 
     path.textContent =
       save.path ||
       save.filename;
 
-    button.append(title, path);
+    button.append(
+      title,
+      path
+    );
 
     button.addEventListener(
       "click",
       async () => {
-        setStartupBusy(true);
+        setStartupBusy(
+          true
+        );
 
         startupStatus.textContent =
           `Loading ${save.filename}...`;
@@ -1436,11 +2144,14 @@ if (landGrid) {
             await requestJson(
               "/api/load-game",
               {
-                method: "POST",
+                method:
+                  "POST",
+
                 headers: {
                   "Content-Type":
                     "application/json",
                 },
+
                 body:
                   JSON.stringify({
                     save_id:
@@ -1459,7 +2170,9 @@ if (landGrid) {
           startupStatus.textContent =
             error.message;
         } finally {
-          setStartupBusy(false);
+          setStartupBusy(
+            false
+          );
         }
       }
     );
@@ -1468,7 +2181,9 @@ if (landGrid) {
   }
 
   async function showLoadGamePanel() {
-    setStartupBusy(true);
+    setStartupBusy(
+      true
+    );
 
     startupStatus.textContent =
       "Looking for saved games...";
@@ -1480,13 +2195,16 @@ if (landGrid) {
         );
 
       const saves =
-        result.saves ?? [];
+        result.saves ??
+        [];
 
       saveGameList.replaceChildren();
 
       if (!saves.length) {
         const empty =
-          document.createElement("p");
+          document.createElement(
+            "p"
+          );
 
         empty.className =
           "no-saves-message";
@@ -1494,84 +2212,113 @@ if (landGrid) {
         empty.textContent =
           "No saved games were found.";
 
-        saveGameList.appendChild(empty);
+        saveGameList.appendChild(
+          empty
+        );
       } else {
-        saves.forEach((save) => {
-          saveGameList.appendChild(
-            makeSaveButton(save)
-          );
-        });
+        saves.forEach(
+          (save) => {
+            saveGameList.appendChild(
+              makeSaveButton(
+                save
+              )
+            );
+          }
+        );
       }
 
-      startupMainActions.hidden = true;
-      loadGamePanel.hidden = false;
-      startupStatus.textContent = "";
+      startupMainActions.hidden =
+        true;
+
+      loadGamePanel.hidden =
+        false;
+
+      startupStatus.textContent =
+        "";
     } catch (error) {
       startupStatus.textContent =
         error.message;
     } finally {
-      setStartupBusy(false);
+      setStartupBusy(
+        false
+      );
     }
   }
 
-  newGameButton.addEventListener(
-    "click",
-    startNewGame
-  );
+  newGameButton
+    .addEventListener(
+      "click",
+      startNewGame
+    );
 
-  loadGameButton.addEventListener(
-    "click",
-    showLoadGamePanel
-  );
+  loadGameButton
+    .addEventListener(
+      "click",
+      showLoadGamePanel
+    );
 
-  backToStartButton.addEventListener(
-    "click",
-    showStartupMain
-  );
+  backToStartButton
+    .addEventListener(
+      "click",
+      showStartupMain
+    );
 
   // ============================================================
   // Left-side tabs
   // ============================================================
 
-  function activateInfoPanel(panelId) {
-    infoTabs.forEach((tab) => {
-      const active =
-        tab.dataset.panel === panelId;
+  function activateInfoPanel(
+    panelId
+  ) {
+    infoTabs.forEach(
+      (tab) => {
+        const active =
+          tab.dataset.panel ===
+          panelId;
 
-      tab.classList.toggle(
-        "is-active",
-        active
-      );
+        tab.classList.toggle(
+          "is-active",
+          active
+        );
 
-      tab.setAttribute(
-        "aria-selected",
-        String(active)
-      );
-    });
-
-    infoPanels.forEach((panel) => {
-      const active =
-        panel.id === panelId;
-
-      panel.classList.toggle(
-        "is-active",
-        active
-      );
-
-      panel.hidden = !active;
-    });
-  }
-
-  infoTabs.forEach((tab) => {
-    tab.addEventListener(
-      "click",
-      () => {
-        activateInfoPanel(
-          tab.dataset.panel
+        tab.setAttribute(
+          "aria-selected",
+          String(
+            active
+          )
         );
       }
     );
-  });
+
+    infoPanels.forEach(
+      (panel) => {
+        const active =
+          panel.id ===
+          panelId;
+
+        panel.classList.toggle(
+          "is-active",
+          active
+        );
+
+        panel.hidden =
+          !active;
+      }
+    );
+  }
+
+  infoTabs.forEach(
+    (tab) => {
+      tab.addEventListener(
+        "click",
+        () => {
+          activateInfoPanel(
+            tab.dataset.panel
+          );
+        }
+      );
+    }
+  );
 
   // ============================================================
   // Map hover: building placement preview only
@@ -1615,6 +2362,19 @@ if (landGrid) {
         return;
       }
 
+      /*
+       * A drag is followed by a synthetic click in most browsers.
+       * Ignore exactly one click after a genuine map pan.
+       */
+      if (
+        suppressNextMapClick
+      ) {
+        suppressNextMapClick =
+          false;
+
+        return;
+      }
+
       const placedSprite =
         event.target.closest(
           ".placed-building"
@@ -1622,7 +2382,7 @@ if (landGrid) {
 
       /*
        * No build tool selected:
-       * left-click inspects the object occupying the map location.
+       * inspect the object occupying the clicked location.
        */
       if (!selectedId) {
         if (placedSprite) {
@@ -1631,6 +2391,7 @@ if (landGrid) {
               .dataset
               .instanceId
           );
+
           return;
         }
 
@@ -1662,6 +2423,7 @@ if (landGrid) {
       if (placedSprite) {
         status.textContent =
           "That area is already occupied.";
+
         return;
       }
 
@@ -1670,17 +2432,25 @@ if (landGrid) {
           ".grid-cell"
         );
 
-      const building = footprint();
+      const building =
+        footprint();
 
-      if (!cell || !building) {
+      if (
+        !cell ||
+        !building
+      ) {
         return;
       }
 
       const column =
-        Number(cell.dataset.column);
+        Number(
+          cell.dataset.column
+        );
 
       const row =
-        Number(cell.dataset.row);
+        Number(
+          cell.dataset.row
+        );
 
       if (
         !canPlace(
@@ -1692,6 +2462,7 @@ if (landGrid) {
       ) {
         status.textContent =
           "That footprint is out of bounds or overlaps another structure.";
+
         return;
       }
 
@@ -1700,11 +2471,14 @@ if (landGrid) {
           await requestJson(
             "/api/facilities",
             {
-              method: "POST",
+              method:
+                "POST",
+
               headers: {
                 "Content-Type":
                   "application/json",
               },
+
               body:
                 JSON.stringify({
                   facility_id:
@@ -1715,15 +2489,22 @@ if (landGrid) {
             }
           );
 
-        if (!simulationState.instances) {
-          simulationState.instances = [];
+        if (
+          !simulationState
+            .instances
+        ) {
+          simulationState.instances =
+            [];
         }
 
         simulationState.instances.push(
           instance
         );
 
-        renderInstance(instance);
+        renderInstance(
+          instance
+        );
+
         renderOperations();
 
         status.textContent =
@@ -1731,7 +2512,10 @@ if (landGrid) {
           `tile ${row + 1}, ` +
           `${column + 1}.`;
 
-        showPreview(column, row);
+        showPreview(
+          column,
+          row
+        );
       } catch (error) {
         status.textContent =
           error.message;
@@ -1750,14 +2534,16 @@ if (landGrid) {
         return;
       }
 
-      tickButton.disabled = true;
+      tickButton.disabled =
+        true;
 
       try {
         const result =
           await requestJson(
             "/api/tick",
             {
-              method: "POST",
+              method:
+                "POST",
             }
           );
 
@@ -1767,7 +2553,8 @@ if (landGrid) {
         renderState();
 
         const operations =
-          result.operations ?? [];
+          result.operations ??
+          [];
 
         const operating =
           operations.filter(
@@ -1777,16 +2564,23 @@ if (landGrid) {
           ).length;
 
         const processedLabel =
-          result.state?.current_time
+          result.state
+            ?.current_time
             ? new Date(
-                result.state.current_time
+                result
+                  .state
+                  .current_time
               ).toLocaleString()
             : (
                 `day ${
-                  result.processed_at?.day ??
+                  result
+                    .processed_at
+                    ?.day ??
                   "?"
                 }, hour ${
-                  result.processed_at?.hour ??
+                  result
+                    .processed_at
+                    ?.hour ??
                   "?"
                 }`
               );
@@ -1801,7 +2595,8 @@ if (landGrid) {
         status.textContent =
           error.message;
       } finally {
-        tickButton.disabled = false;
+        tickButton.disabled =
+          false;
       }
     }
   );
@@ -1811,21 +2606,26 @@ if (landGrid) {
   // ============================================================
 
   function cancelPlacement() {
-    selectedId = null;
+    selectedId =
+      null;
+
     removePreview();
 
     buildList
       .querySelectorAll(
         ".build-option"
       )
-      .forEach((button) => {
-        button.setAttribute(
-          "aria-pressed",
-          "false"
-        );
-      });
+      .forEach(
+        (button) => {
+          button.setAttribute(
+            "aria-pressed",
+            "false"
+          );
+        }
+      );
 
-    cancelButton.disabled = true;
+    cancelButton.disabled =
+      true;
 
     status.textContent =
       simulationState
@@ -1845,7 +2645,40 @@ if (landGrid) {
   document.addEventListener(
     "keydown",
     (event) => {
-      if (event.key !== "Escape") {
+      if (
+        event.key === "+" ||
+        event.key === "="
+      ) {
+        zoomMapBy(
+          ZOOM_STEP
+        );
+
+        return;
+      }
+
+      if (
+        event.key === "-" ||
+        event.key === "_"
+      ) {
+        zoomMapBy(
+          -ZOOM_STEP
+        );
+
+        return;
+      }
+
+      if (
+        event.key === "0"
+      ) {
+        resetMapView();
+
+        return;
+      }
+
+      if (
+        event.key !==
+        "Escape"
+      ) {
         return;
       }
 
@@ -1865,10 +2698,13 @@ if (landGrid) {
   // ============================================================
 
   clearRenderedGame();
+  resetMapView();
 
   currentGameName.textContent =
     "No game loaded";
 
-  startupOverlay.hidden = false;
+  startupOverlay.hidden =
+    false;
+
   showStartupMain();
 }

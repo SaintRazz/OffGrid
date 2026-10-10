@@ -124,9 +124,20 @@
           <div class="map-header">
             <span>Property Map</span>
             <span>42 × 42 tiles · 5 ft per tile</span>
-            <button id="advance-tick" class="control-button" type="button" disabled>Advance 1 hour</button>
+
+            <div class="map-controls" aria-label="Map navigation controls">
+              <button id="zoom-out" class="control-button map-control-button" type="button" aria-label="Zoom out">−</button>
+              <span id="zoom-level" class="zoom-level" aria-live="polite">100%</span>
+              <button id="zoom-in" class="control-button map-control-button" type="button" aria-label="Zoom in">+</button>
+              <button id="zoom-reset" class="control-button map-reset-button" type="button">Reset View</button>
+              <button id="advance-tick" class="control-button" type="button" disabled>Advance 1 hour</button>
+            </div>
           </div>
-          <div id="land-grid" class="land-grid" role="grid" aria-label="Property map"></div>
+
+          <div id="map-viewport" class="map-viewport" aria-label="Property map viewport">
+            <div id="land-grid" class="land-grid" role="grid" aria-label="Property map"></div>
+          </div>
+
           <p id="placement-status" class="placement-status" aria-live="polite">Choose New Game or Load Game to begin.</p>
         </main>
 
