@@ -1,6 +1,7 @@
 import json
 import shutil
 from pathlib import Path
+from threading import Lock
 
 from flask import Flask, jsonify, render_template, request
 
@@ -19,51 +20,8 @@ SAVES_DIR = BASE_DIR / "saves"
 
 CURRENT_GAME_FILE = None
 CURRENT_GAME_NAME = None
+SIMULATION_LOCK = Lock()
 app.extensions["simulation"] = None
-
-
-def calculate_system_preview(daily_load_kwh, solar_kw, battery_kwh, autonomy_days):
-    """
-    Legacy system-sizing helper retained for the existing UI/API.
-    This is separate from the live homestead simulation.
-    """
-    if daily_load_kwh <= 0:
-        raise ValueError("Daily load must be greater than zero.")
-    if solar_kw < 0:
-        raise ValueError("Solar capacity cannot be negative.")
-    if battery_kwh < 0:
-        raise ValueError("Battery capacity cannot be negative.")
-    if autonomy_days <= 0:
-        raise ValueError("Autonomy target must be greater than zero.")
-
-    daily_generation_kwh = solar_kw * 4.0
-    solar_coverage_pct = min(
-        (daily_generation_kwh / daily_load_kwh) * 100,
-        100.0,
-    )
-
-    effective_daily_demand_kwh = daily_load_kwh * 1.25
-    estimated_autonomy_days = (
-        battery_kwh / effective_daily_demand_kwh
-        if effective_daily_demand_kwh > 0
-        else 0
-    )
-
-    if estimated_autonomy_days >= autonomy_days and solar_coverage_pct >= 80:
-        system_status = "Ready for off-grid use"
-    elif estimated_autonomy_days >= autonomy_days:
-        system_status = "Battery is sufficient"
-    elif solar_coverage_pct >= 100:
-        system_status = "Battery is the limiting factor"
-    else:
-        system_status = "Needs more capacity"
-
-    return {
-        "daily_generation_kwh": round(daily_generation_kwh, 2),
-        "solar_coverage_pct": round(solar_coverage_pct, 2),
-        "estimated_autonomy_days": round(estimated_autonomy_days, 2),
-        "system_status": system_status,
-    }
 
 
 def create_simulation(game_state_file):
@@ -83,12 +41,6 @@ def get_simulation():
 
 
 def find_saved_games():
-    """
-    Return loadable JSON save files.
-
-    NewGame.json is an immutable template and ActiveGame.json is the temporary
-    working state for a newly started game, so neither is shown as a saved game.
-    """
     excluded_names = {
         FACILITIES_FILE.name,
         RESOURCES_FILE.name,
@@ -98,30 +50,23 @@ def find_saved_games():
     }
 
     candidates = []
-
     for path in sorted(BASE_DIR.glob("*.json")):
         if path.name not in excluded_names:
             candidates.append(path)
 
     if SAVES_DIR.exists():
-        for path in sorted(SAVES_DIR.glob("*.json")):
-            candidates.append(path)
+        candidates.extend(sorted(SAVES_DIR.glob("*.json")))
 
     return candidates
 
 
 def save_record(path):
-    """
-    Create a browser-safe identifier for a save without exposing arbitrary
-    filesystem paths to the load endpoint.
-    """
     try:
         relative = path.relative_to(BASE_DIR)
     except ValueError:
         relative = Path(path.name)
 
     relative_text = relative.as_posix()
-
     return {
         "id": relative_text,
         "filename": path.name,
@@ -131,20 +76,13 @@ def save_record(path):
 
 
 def resolve_save_id(save_id):
-    """
-    Resolve only files that are already in the server-generated save list.
-    """
     records = {
-        record["id"]: path
+        save_record(path)["id"]: path
         for path in find_saved_games()
-        for record in [save_record(path)]
     }
-
     selected = records.get(save_id)
-
     if selected is None:
         raise ValueError("Unknown saved game.")
-
     return selected
 
 
@@ -155,7 +93,6 @@ def activate_game(game_state_file, game_name=None):
     CURRENT_GAME_FILE = game_state_file
     CURRENT_GAME_NAME = game_name or game_state_file.stem
     app.extensions["simulation"] = simulation
-
     return simulation
 
 
@@ -175,12 +112,7 @@ def session_status():
 
 @app.get("/api/saves")
 def saved_games():
-    return jsonify({
-        "saves": [
-            save_record(path)
-            for path in find_saved_games()
-        ]
-    })
+    return jsonify({"saves": [save_record(path) for path in find_saved_games()]})
 
 
 @app.post("/api/new-game")
@@ -191,8 +123,10 @@ def new_game():
         }), 500
 
     try:
-        shutil.copyfile(NEW_GAME_FILE, ACTIVE_GAME_FILE)
-        simulation = activate_game(ACTIVE_GAME_FILE, "New Game")
+        with SIMULATION_LOCK:
+            shutil.copyfile(NEW_GAME_FILE, ACTIVE_GAME_FILE)
+            simulation = activate_game(ACTIVE_GAME_FILE, "New Game")
+            state = simulation.state()
     except (OSError, json.JSONDecodeError, TypeError, ValueError, KeyError) as exc:
         return jsonify({"error": str(exc)}), 500
 
@@ -200,7 +134,7 @@ def new_game():
         "status": "new_game",
         "file": ACTIVE_GAME_FILE.name,
         "game_name": CURRENT_GAME_NAME,
-        "state": simulation.state(),
+        "state": state,
     })
 
 
@@ -214,30 +148,64 @@ def load_game():
 
     try:
         selected = resolve_save_id(save_id)
-        simulation = activate_game(selected, selected.stem)
-    except (
-        OSError,
-        json.JSONDecodeError,
-        TypeError,
-        ValueError,
-        KeyError,
-    ) as exc:
+        with SIMULATION_LOCK:
+            simulation = activate_game(selected, selected.stem)
+            state = simulation.state()
+    except (OSError, json.JSONDecodeError, TypeError, ValueError, KeyError) as exc:
         return jsonify({"error": str(exc)}), 400
 
     return jsonify({
         "status": "loaded",
         "file": selected.name,
         "game_name": CURRENT_GAME_NAME,
-        "state": simulation.state(),
+        "state": state,
     })
 
 
 @app.get("/api/simulation")
 def simulation_state():
     try:
-        return jsonify(get_simulation().state())
+        with SIMULATION_LOCK:
+            state = get_simulation().state()
+        return jsonify(state)
     except RuntimeError as exc:
         return jsonify({"error": str(exc)}), 409
+
+
+@app.post("/api/subtick")
+def advance_subtick():
+    """Advance one simulated minute.
+
+    The browser calls this once per real-time second. Facility and household
+    processing runs only when the 60th sub-tick closes the simulated hour.
+    """
+    try:
+        with SIMULATION_LOCK:
+            result = get_simulation().advance_subtick()
+    except (RuntimeError, OSError, TypeError, ValueError, KeyError) as exc:
+        return jsonify({"error": str(exc)}), 400
+
+    return jsonify(result)
+
+
+@app.post("/api/player/walk")
+def walk_player():
+    payload = request.get_json(silent=True) or {}
+
+    try:
+        column = float(payload.get("column"))
+        row = float(payload.get("row"))
+        with SIMULATION_LOCK:
+            player = get_simulation().start_walk(column, row)
+            state = get_simulation().state()
+    except (RuntimeError, OSError, TypeError, ValueError, KeyError) as exc:
+        return jsonify({"error": str(exc)}), 400
+
+    return jsonify({
+        "status": "walking" if player.get("current_task") else "already_there",
+        "player": player,
+        "state": state,
+    })
 
 
 @app.post("/api/facilities")
@@ -245,23 +213,27 @@ def place_facility():
     payload = request.get_json(silent=True) or {}
 
     try:
-        instance = get_simulation().place_facility(
-            facility_id=payload.get("facility_id"),
-            column=payload.get("column"),
-            row=payload.get("row"),
-            rotated=False,
-        )
+        with SIMULATION_LOCK:
+            instance = get_simulation().place_facility(
+                facility_id=payload.get("facility_id"),
+                column=payload.get("column"),
+                row=payload.get("row"),
+                rotated=False,
+            )
+            state = get_simulation().state()
     except (RuntimeError, TypeError, ValueError, KeyError) as exc:
         return jsonify({"error": str(exc)}), 400
 
-    return jsonify(instance), 201
+    return jsonify({"instance": instance, "state": state}), 201
 
 
 @app.post("/api/tick")
-def advance_simulation():
+def advance_simulation_legacy():
+    """Legacy/manual full-tick endpoint retained for debugging only."""
     try:
-        result = get_simulation().advance_hour()
-    except (RuntimeError, TypeError, ValueError, KeyError) as exc:
+        with SIMULATION_LOCK:
+            result = get_simulation().advance_hour()
+    except (RuntimeError, OSError, TypeError, ValueError, KeyError) as exc:
         return jsonify({"error": str(exc)}), 400
 
     return jsonify(result)
@@ -270,7 +242,8 @@ def advance_simulation():
 @app.post("/api/save")
 def save_simulation():
     try:
-        get_simulation().save()
+        with SIMULATION_LOCK:
+            get_simulation().save()
     except (RuntimeError, OSError, TypeError, ValueError) as exc:
         return jsonify({"error": str(exc)}), 500
 
@@ -283,7 +256,9 @@ def save_simulation():
 @app.post("/api/reload")
 def reload_simulation():
     try:
-        get_simulation().load_game_state()
+        with SIMULATION_LOCK:
+            get_simulation().load_game_state()
+            state = get_simulation().state()
     except (
         RuntimeError,
         OSError,
@@ -294,26 +269,8 @@ def reload_simulation():
     ) as exc:
         return jsonify({"error": str(exc)}), 400
 
-    return jsonify(get_simulation().state())
-
-
-@app.post("/api/system-preview")
-def system_preview():
-    payload = request.get_json(silent=True) or {}
-
-    try:
-        result = calculate_system_preview(
-            float(payload.get("daily_load_kwh", 0)),
-            float(payload.get("solar_kw", 0)),
-            float(payload.get("battery_kwh", 0)),
-            float(payload.get("autonomy_days", 1)),
-        )
-    except (TypeError, ValueError) as exc:
-        return jsonify({"error": str(exc)}), 400
-
-    return jsonify(result)
+    return jsonify(state)
 
 
 if __name__ == "__main__":
-    # No terminal prompt. The browser startup overlay chooses New Game or Load Game.
     app.run(debug=True, use_reloader=False)

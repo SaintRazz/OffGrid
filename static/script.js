@@ -3,18 +3,19 @@
 const landGrid = document.getElementById("land-grid");
 
 if (landGrid) {
-  const gridSize = 42;
-  const placements = [];
-  const definitionsById = new Map();
+  const GRID_SIZE = 42;
+  const MIN_ZOOM = 1;
+  const MAX_ZOOM = 4;
+  const ZOOM_STEP = 0.25;
+  const DRAG_THRESHOLD_PX = 5;
+  const SUBTICK_REAL_MS = 1000;
 
   const buildList = document.getElementById("build-list");
   const cancelButton = document.getElementById("cancel-building");
-  const tickButton = document.getElementById("advance-tick");
-  const status = document.getElementById("placement-status");
+  const statusLine = document.getElementById("placement-status");
   const currentGameName = document.getElementById("current-game-name");
-
-  const infoTabs = document.querySelectorAll(".info-tab");
-  const infoPanels = document.querySelectorAll(".info-panel");
+  const runtimeStatus = document.querySelector(".runtime-status");
+  const runtimeLabel = document.getElementById("runtime-label");
 
   const startupOverlay = document.getElementById("startup-overlay");
   const startupMainActions = document.getElementById("startup-main-actions");
@@ -30,6 +31,7 @@ if (landGrid) {
   const inspectorSubtitle = document.getElementById("object-inspector-subtitle");
   const inspectorContent = document.getElementById("object-inspector-content");
   const inspectorCloseButton = document.getElementById("object-inspector-close");
+  const walkHereButton = document.getElementById("walk-here-button");
 
   const mapViewport = document.getElementById("map-viewport");
   const zoomInButton = document.getElementById("zoom-in");
@@ -37,20 +39,20 @@ if (landGrid) {
   const zoomResetButton = document.getElementById("zoom-reset");
   const zoomLevel = document.getElementById("zoom-level");
 
-  let selectedId = null;
-  let hoverPosition = null;
-  let preview = null;
-  let simulationState = null;
+  const infoTabs = document.querySelectorAll(".info-tab");
+  const infoPanels = document.querySelectorAll(".info-panel");
 
-  const MIN_ZOOM = 1;
-  const MAX_ZOOM = 4;
-  const ZOOM_STEP = 0.25;
-  const DRAG_THRESHOLD_PX = 5;
+  const definitionsById = new Map();
+  let placements = [];
+  let simulationState = null;
+  let selectedBuildId = null;
+  let selectedMapObject = null;
+  let preview = null;
+  let avatar = null;
 
   let mapZoom = 1;
   let mapPanX = 0;
   let mapPanY = 0;
-
   let mapPointerDown = false;
   let mapPointerId = null;
   let mapDragStarted = false;
@@ -60,163 +62,185 @@ if (landGrid) {
   let dragStartPanY = 0;
   let suppressNextMapClick = false;
 
+  let runtimeTimer = null;
+  let subTickInFlight = false;
+  let gameLoaded = false;
+
   // ============================================================
-  // Map grid
+  // Grid
   // ============================================================
 
-  for (let row = 0; row < gridSize; row += 1) {
-    for (let column = 0; column < gridSize; column += 1) {
+  for (let row = 0; row < GRID_SIZE; row += 1) {
+    for (let column = 0; column < GRID_SIZE; column += 1) {
       const cell = document.createElement("div");
       cell.className = "grid-cell";
+      cell.dataset.row = String(row);
+      cell.dataset.column = String(column);
+      cell.style.gridRow = String(row + 1);
+      cell.style.gridColumn = String(column + 1);
       cell.setAttribute("role", "gridcell");
       cell.setAttribute(
         "aria-label",
         `Grass tile, row ${row + 1}, column ${column + 1}`
       );
-      cell.dataset.row = row;
-      cell.dataset.column = column;
-      cell.style.gridRow = String(row + 1);
-      cell.style.gridColumn = String(column + 1);
       landGrid.appendChild(cell);
     }
   }
 
-  // ============================================================
-  // Formatting helpers
-  // ============================================================
-
-  function formatAmount(amount) {
+  function formatAmount(value, maximumFractionDigits = 4) {
     return new Intl.NumberFormat(undefined, {
-      maximumFractionDigits: 4,
-    }).format(amount ?? 0);
+      maximumFractionDigits,
+    }).format(Number(value ?? 0));
   }
 
   function prettyName(value) {
-    return String(value)
+    return String(value ?? "")
       .replaceAll("_", " ")
       .replaceAll("-", " ")
       .replace(/\b\w/g, (letter) => letter.toUpperCase());
   }
 
-  function formatInspectorValue(value) {
-    if (value === null || value === undefined) {
-      return "—";
-    }
-
-    if (typeof value === "number") {
-      return formatAmount(value);
-    }
-
-    if (typeof value === "boolean") {
-      return value ? "Yes" : "No";
-    }
-
-    return String(value);
+  function addListItem(list, label, value) {
+    const item = document.createElement("li");
+    item.textContent = `${label}: ${value}`;
+    list.appendChild(item);
   }
 
-  function flattenObject(object, prefix = "", result = []) {
-    if (!object || typeof object !== "object") {
-      return result;
-    }
-
-    Object.entries(object).forEach(([key, value]) => {
-      const label = prefix
-        ? `${prefix} · ${prettyName(key)}`
-        : prettyName(key);
-
-      if (
-        value !== null &&
-        typeof value === "object" &&
-        !Array.isArray(value)
-      ) {
-        flattenObject(value, label, result);
-        return;
-      }
-
-      if (Array.isArray(value)) {
-        result.push([
-          label,
-          value.length ? value.join(", ") : "None",
-        ]);
-        return;
-      }
-
-      result.push([label, formatInspectorValue(value)]);
+  async function api(url, options = {}) {
+    const response = await fetch(url, {
+      headers: {
+        "Content-Type": "application/json",
+        ...(options.headers ?? {}),
+      },
+      ...options,
     });
 
-    return result;
+    const data = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+      throw new Error(
+        data.error || `${response.status} ${response.statusText}`
+      );
+    }
+
+    return data;
   }
 
-  function isRateField(key) {
-    const name = key.toLowerCase();
+  // ============================================================
+  // Runtime clock
+  // ============================================================
 
-    return (
-      name.includes("rate") ||
-      name.includes("yield") ||
-      name.includes("processing") ||
-      name.includes("degradation") ||
-      name.includes("per_day") ||
-      name.includes("per_year") ||
-      name.includes("per_hour")
+  function setRuntimeRunning(running, label = null) {
+    runtimeStatus?.classList.toggle("is-running", running);
+
+    if (runtimeLabel) {
+      runtimeLabel.textContent =
+        label ?? (running ? "Running" : "Paused");
+    }
+  }
+
+  function startRuntime() {
+    if (runtimeTimer !== null) {
+      return;
+    }
+
+    setRuntimeRunning(true);
+
+    runtimeTimer = window.setInterval(
+      runSubTick,
+      SUBTICK_REAL_MS
     );
   }
 
-  function extractRates(definition) {
-    const rates = [];
-
-    function walk(object, prefix = "") {
-      if (!object || typeof object !== "object") {
-        return;
-      }
-
-      Object.entries(object).forEach(([key, value]) => {
-        const label = prefix
-          ? `${prefix} · ${prettyName(key)}`
-          : prettyName(key);
-
-        if (
-          value !== null &&
-          typeof value === "object" &&
-          !Array.isArray(value)
-        ) {
-          walk(value, label);
-          return;
-        }
-
-        if (isRateField(key)) {
-          rates.push([label, formatInspectorValue(value)]);
-        }
-      });
+  function stopRuntime(label = "Paused") {
+    if (runtimeTimer !== null) {
+      window.clearInterval(runtimeTimer);
+      runtimeTimer = null;
     }
 
-    walk(definition);
-    return rates;
+    setRuntimeRunning(false, label);
   }
 
-  function genericDefinitionRows(definition) {
-    return flattenObject(definition).filter(([label]) => {
-      const lower = label.toLowerCase();
+  async function runSubTick() {
+    if (!gameLoaded || subTickInFlight) {
+      return;
+    }
 
-      return (
-        lower !== "id" &&
-        lower !== "name" &&
-        lower !== "image" &&
-        !lower.includes("rate") &&
-        !lower.includes("yield") &&
-        !lower.includes("processing") &&
-        !lower.includes("degradation") &&
-        !lower.includes("per day") &&
-        !lower.includes("per year") &&
-        !lower.includes("per hour")
+    subTickInFlight = true;
+
+    try {
+      const result = await api(
+        "/api/subtick",
+        {
+          method: "POST",
+          body: "{}",
+        }
       );
-    });
+
+      renderState(
+        result.state,
+        result.movement ?? null
+      );
+
+      if (result.full_tick) {
+        statusLine.textContent =
+          "Hourly simulation processed and saved.";
+      }
+    } catch (error) {
+      stopRuntime("Stopped");
+
+      statusLine.textContent =
+        `Automatic time stopped: ${error.message}`;
+    } finally {
+      subTickInFlight = false;
+    }
+  }
+
+  function setDateAndClock(state) {
+    const dateElement =
+      document.getElementById("simulation-date");
+
+    const clockElement =
+      document.getElementById("simulation-clock");
+
+    if (!state?.current_time) {
+      dateElement.textContent = "Not started";
+      clockElement.textContent = "--:--";
+      return;
+    }
+
+    const date =
+      new Date(state.current_time);
+
+    dateElement.textContent =
+      new Intl.DateTimeFormat(
+        undefined,
+        {
+          year: "numeric",
+          month: "short",
+          day: "numeric",
+        }
+      ).format(date);
+
+    clockElement.textContent =
+      new Intl.DateTimeFormat(
+        undefined,
+        {
+          hour: "numeric",
+          minute: "2-digit",
+        }
+      ).format(date);
   }
 
   // ============================================================
-  // Map navigation
+  // Map zoom and pan
   // ============================================================
 
-  function clamp(value, minimum, maximum) {
+  function clamp(
+    value,
+    minimum,
+    maximum
+  ) {
     return Math.min(
       maximum,
       Math.max(minimum, value)
@@ -228,28 +252,18 @@ if (landGrid) {
     panY = mapPanY,
     zoom = mapZoom
   ) {
-    const viewportWidth =
-      mapViewport.clientWidth;
-
-    const viewportHeight =
-      mapViewport.clientHeight;
-
-    const contentWidth =
-      landGrid.offsetWidth * zoom;
-
-    const contentHeight =
-      landGrid.offsetHeight * zoom;
-
     const minimumX =
       Math.min(
         0,
-        viewportWidth - contentWidth
+        mapViewport.clientWidth -
+          landGrid.offsetWidth * zoom
       );
 
     const minimumY =
       Math.min(
         0,
-        viewportHeight - contentHeight
+        mapViewport.clientHeight -
+          landGrid.offsetHeight * zoom
       );
 
     return {
@@ -258,7 +272,6 @@ if (landGrid) {
         minimumX,
         0
       ),
-
       y: clamp(
         panY,
         minimumY,
@@ -295,8 +308,8 @@ if (landGrid) {
 
   function setMapZoom(
     requestedZoom,
-    focalClientX = null,
-    focalClientY = null
+    clientX = null,
+    clientY = null
   ) {
     const newZoom =
       clamp(
@@ -309,25 +322,19 @@ if (landGrid) {
       return;
     }
 
-    const viewportRect =
+    const rect =
       mapViewport.getBoundingClientRect();
 
     const focalX =
-      focalClientX == null
-        ? viewportRect.width / 2
-        : focalClientX -
-          viewportRect.left;
+      clientX == null
+        ? rect.width / 2
+        : clientX - rect.left;
 
     const focalY =
-      focalClientY == null
-        ? viewportRect.height / 2
-        : focalClientY -
-          viewportRect.top;
+      clientY == null
+        ? rect.height / 2
+        : clientY - rect.top;
 
-    /*
-     * Find the map-space point currently under the cursor, then
-     * calculate the new pan so that same point stays under it.
-     */
     const mapX =
       (focalX - mapPanX) /
       mapZoom;
@@ -353,33 +360,50 @@ if (landGrid) {
     mapZoom = 1;
     mapPanX = 0;
     mapPanY = 0;
+
     renderMapTransform();
   }
 
-  function zoomMapBy(
-    delta,
-    focalClientX = null,
-    focalClientY = null
-  ) {
-    setMapZoom(
-      mapZoom + delta,
-      focalClientX,
-      focalClientY
-    );
-  }
+  zoomInButton.addEventListener(
+    "click",
+    () => {
+      setMapZoom(
+        mapZoom + ZOOM_STEP
+      );
+    }
+  );
+
+  zoomOutButton.addEventListener(
+    "click",
+    () => {
+      setMapZoom(
+        mapZoom - ZOOM_STEP
+      );
+    }
+  );
+
+  zoomResetButton.addEventListener(
+    "click",
+    resetMapView
+  );
+
+  window.addEventListener(
+    "resize",
+    renderMapTransform
+  );
 
   mapViewport.addEventListener(
     "wheel",
     (event) => {
       event.preventDefault();
 
-      const direction =
-        event.deltaY < 0
-          ? ZOOM_STEP
-          : -ZOOM_STEP;
-
-      zoomMapBy(
-        direction,
+      setMapZoom(
+        mapZoom +
+          (
+            event.deltaY < 0
+              ? ZOOM_STEP
+              : -ZOOM_STEP
+          ),
         event.clientX,
         event.clientY
       );
@@ -389,41 +413,12 @@ if (landGrid) {
     }
   );
 
-  zoomInButton.addEventListener(
-    "click",
-    () => {
-      zoomMapBy(ZOOM_STEP);
-    }
-  );
-
-  zoomOutButton.addEventListener(
-    "click",
-    () => {
-      zoomMapBy(-ZOOM_STEP);
-    }
-  );
-
-  zoomResetButton.addEventListener(
-    "click",
-    resetMapView
-  );
-
-  /*
-   * Important:
-   * We do NOT capture the pointer here.
-   *
-   * A normal mouse-down / mouse-up should remain a normal click
-   * so the underlying tile or facility can still be selected.
-   *
-   * Pointer capture begins only after movement exceeds the drag
-   * threshold in the pointermove handler below.
-   */
   mapViewport.addEventListener(
     "pointerdown",
     (event) => {
       if (
         event.button !== 0 ||
-        selectedId ||
+        selectedBuildId ||
         mapZoom <= 1
       ) {
         return;
@@ -435,6 +430,7 @@ if (landGrid) {
 
       dragStartX = event.clientX;
       dragStartY = event.clientY;
+
       dragStartPanX = mapPanX;
       dragStartPanY = mapPanY;
     }
@@ -460,14 +456,11 @@ if (landGrid) {
         dragStartY;
 
       if (!mapDragStarted) {
-        const distance =
+        if (
           Math.hypot(
             deltaX,
             deltaY
-          );
-
-        if (
-          distance <
+          ) <
           DRAG_THRESHOLD_PX
         ) {
           return;
@@ -475,10 +468,6 @@ if (landGrid) {
 
         mapDragStarted = true;
 
-        /*
-         * Only capture after we've established that this gesture
-         * is actually a drag rather than an ordinary click.
-         */
         mapViewport.setPointerCapture(
           event.pointerId
         );
@@ -488,6 +477,7 @@ if (landGrid) {
         );
 
         clearMapSelection();
+        closeInspector();
       }
 
       event.preventDefault();
@@ -522,13 +512,13 @@ if (landGrid) {
 
     mapPointerDown = false;
     mapPointerId = null;
-    mapDragStarted = false;
 
     mapViewport.classList.remove(
       "is-dragging"
     );
 
     if (
+      mapDragStarted &&
       mapViewport.hasPointerCapture(
         event.pointerId
       )
@@ -537,6 +527,8 @@ if (landGrid) {
         event.pointerId
       );
     }
+
+    mapDragStarted = false;
   }
 
   mapViewport.addEventListener(
@@ -549,33 +541,70 @@ if (landGrid) {
     finishMapDrag
   );
 
-  window.addEventListener(
-    "resize",
-    renderMapTransform
-  );
+  function mapCoordinatesFromClient(
+    clientX,
+    clientY
+  ) {
+    const rect =
+      landGrid.getBoundingClientRect();
 
-  // ============================================================
-  // Placement helpers
-  // ============================================================
+    const column =
+      clamp(
+        Math.floor(
+          (clientX - rect.left) /
+          (rect.width / GRID_SIZE)
+        ),
+        0,
+        GRID_SIZE - 1
+      );
 
-  function footprint() {
-    return definitionsById.get(selectedId) ?? null;
+    const row =
+      clamp(
+        Math.floor(
+          (clientY - rect.top) /
+          (rect.height / GRID_SIZE)
+        ),
+        0,
+        GRID_SIZE - 1
+      );
+
+    return {
+      column,
+      row,
+    };
   }
 
-  function canPlace(column, row, width, height) {
+  // ============================================================
+  // Building placement
+  // ============================================================
+
+  function canPlace(
+    column,
+    row,
+    width,
+    height
+  ) {
     if (
-      column + width > gridSize ||
-      row + height > gridSize
+      column < 0 ||
+      row < 0 ||
+      column + width > GRID_SIZE ||
+      row + height > GRID_SIZE
     ) {
       return false;
     }
 
     return placements.every(
       (placed) =>
-        column + width <= placed.column ||
-        placed.column + placed.width <= column ||
-        row + height <= placed.row ||
-        placed.row + placed.height <= row
+        column + width <=
+          placed.column ||
+        placed.column +
+          placed.width <=
+          column ||
+        row + height <=
+          placed.row ||
+        placed.row +
+          placed.height <=
+          row
     );
   }
 
@@ -584,2034 +613,101 @@ if (landGrid) {
     preview = null;
   }
 
-  function showPreview(column, row) {
-    hoverPosition = { column, row };
+  function showPreview(
+    column,
+    row
+  ) {
     removePreview();
 
-    const building = footprint();
+    const definition =
+      definitionsById.get(
+        selectedBuildId
+      );
 
-    if (!building) {
+    if (!definition) {
       return;
     }
 
-    preview = document.createElement("img");
-    preview.className = "building-sprite building-preview";
-    preview.src = `/static/assets/sprites/${building.image}`;
+    preview =
+      document.createElement(
+        "img"
+      );
+
+    preview.className =
+      "building-sprite building-preview";
+
+    preview.src =
+      `/static/assets/sprites/${definition.image}`;
+
     preview.alt = "";
+
     preview.style.gridColumn =
-      `${column + 1} / span ${building.width}`;
+      `${column + 1} / span ${definition.width}`;
+
     preview.style.gridRow =
-      `${row + 1} / span ${building.height}`;
+      `${row + 1} / span ${definition.height}`;
 
     preview.classList.add(
       canPlace(
         column,
         row,
-        building.width,
-        building.height
+        definition.width,
+        definition.height
       )
         ? "is-valid"
         : "is-invalid"
     );
 
-    landGrid.appendChild(preview);
-  }
-
-  // ============================================================
-  // Clock
-  // ============================================================
-
-  function setDateAndClock(value) {
-    const dateElement =
-      document.getElementById("simulation-date");
-
-    const clockElement =
-      document.getElementById("simulation-clock");
-
-    if (!value) {
-      dateElement.textContent = "Not started";
-      clockElement.textContent = "--:--";
-      return;
-    }
-
-    const date = new Date(value);
-
-    dateElement.textContent =
-      new Intl.DateTimeFormat(undefined, {
-        year: "numeric",
-        month: "short",
-        day: "numeric",
-      }).format(date);
-
-    clockElement.textContent =
-      new Intl.DateTimeFormat(undefined, {
-        hour: "numeric",
-        minute: "2-digit",
-      }).format(date);
-  }
-
-  // ============================================================
-  // Household displays
-  // ============================================================
-
-  function addListItem(list, label, value) {
-    const item = document.createElement("li");
-    item.textContent = `${label}: ${value}`;
-    list.appendChild(item);
-  }
-
-  function dailyHouseholdBaseline() {
-    const stateBaseline =
-      simulationState?.household_baseline_daily ?? {};
-
-    const profile =
-      simulationState?.household_profile ?? {};
-
-    return {
-      dailyFlows:
-        stateBaseline.daily_flows ??
-        profile.daily_flows ??
-        {},
-
-      electricity:
-        stateBaseline.electricity_kwh_per_day ??
-        profile.electricity_kwh_per_day ??
-        {},
-    };
-  }
-
-  function renderHouseholdSummary() {
-    const list =
-      document.getElementById("household-summary-list");
-
-    if (!list) {
-      return;
-    }
-
-    list.replaceChildren();
-
-    const profile =
-      simulationState?.household_profile;
-
-    if (!profile) {
-      addListItem(
-        list,
-        "Household profile",
-        "Unavailable"
-      );
-      return;
-    }
-
-    addListItem(
-      list,
-      "Profile",
-      profile.name ??
-        profile.profile_id ??
-        "Default household"
-    );
-
-    addListItem(
-      list,
-      "Occupants",
-      formatAmount(profile.occupants ?? 0)
-    );
-
-    addListItem(
-      list,
-      "House size",
-      `${formatAmount(profile.house_sq_ft ?? 0)} sq ft`
-    );
-
-    addListItem(
-      list,
-      "Electrical system",
-      profile.all_electric
-        ? "All-electric"
-        : "Mixed"
-    );
-
-    addListItem(
-      list,
-      "Seasonal model",
-      profile.seasonal_modeling
-        ? "Enabled"
-        : "Annual-average daily values"
-    );
-  }
-
-  function renderConsumption() {
-    const consumptionList =
-      document.getElementById("consumption-list");
-
-    const electricityList =
-      document.getElementById(
-        "electricity-breakdown-list"
-      );
-
-    if (
-      !consumptionList ||
-      !electricityList
-    ) {
-      return;
-    }
-
-    consumptionList.replaceChildren();
-    electricityList.replaceChildren();
-
-    const baseline =
-      dailyHouseholdBaseline();
-
-    const flows =
-      baseline.dailyFlows;
-
-    const electricity =
-      baseline.electricity;
-
-    addListItem(
-      consumptionList,
-      "Groceries",
-      `$${formatAmount(
-        flows.groceries_usd ?? 0
-      )} / day`
-    );
-
-    addListItem(
-      consumptionList,
-      "Tap water",
-      `${formatAmount(
-        flows.tap_water_gal ?? 0
-      )} gal / day`
-    );
-
-    addListItem(
-      consumptionList,
-      "Electricity",
-      `${formatAmount(
-        electricity.total ?? 0
-      )} kWh / day`
-    );
-
-    const endUses = [
-      [
-        "HVAC cooling",
-        "hvac_cooling",
-      ],
-      [
-        "HVAC heating",
-        "hvac_heating",
-      ],
-      [
-        "Water heating",
-        "water_heating",
-      ],
-      [
-        "Refrigeration / freezer",
-        "refrigeration_freezer",
-      ],
-      [
-        "Cooking",
-        "cooking",
-      ],
-      [
-        "Lighting",
-        "lighting",
-      ],
-      [
-        "Laundry",
-        "laundry",
-      ],
-      [
-        "Electronics / personal plug loads",
-        "electronics_personal_plug_loads",
-      ],
-      [
-        "Other household electrical loads",
-        "other_household_electrical_loads",
-      ],
-    ];
-
-    endUses.forEach(
-      ([label, key]) => {
-        if (
-          electricity[key] == null
-        ) {
-          return;
-        }
-
-        addListItem(
-          electricityList,
-          label,
-          `${formatAmount(
-            electricity[key]
-          )} kWh / day`
-        );
-      }
-    );
-  }
-
-  function renderWasteWater() {
-    const list =
-      document.getElementById(
-        "waste-water-list"
-      );
-
-    if (!list) {
-      return;
-    }
-
-    list.replaceChildren();
-
-    const {
-      dailyFlows: flows,
-    } =
-      dailyHouseholdBaseline();
-
-    const rows = [
-      [
-        "Greywater",
-        "greywater_gal",
-        "gal / day",
-      ],
-      [
-        "Blackwater",
-        "blackwater_gal",
-        "gal / day",
-      ],
-      [
-        "Other water use",
-        "other_water_use_gal",
-        "gal / day",
-      ],
-      [
-        "Kitchen waste",
-        "kitchen_waste_lb",
-        "lb / day",
-      ],
-      [
-        "Recyclable paper / cardboard",
-        "recyclable_paper_lb",
-        "lb / day",
-      ],
-      [
-        "Recyclable plastic",
-        "recyclable_plastic_lb",
-        "lb / day",
-      ],
-      [
-        "Recyclable glass",
-        "recyclable_glass_lb",
-        "lb / day",
-      ],
-      [
-        "Recyclable metal",
-        "recyclable_metal_lb",
-        "lb / day",
-      ],
-      [
-        "Residual non-food waste",
-        "residual_nonfood_waste_lb",
-        "lb / day",
-      ],
-    ];
-
-    rows.forEach(
-      ([label, key, unit]) => {
-        addListItem(
-          list,
-          label,
-          `${formatAmount(
-            flows[key] ?? 0
-          )} ${unit}`
-        );
-      }
-    );
-
-    const greywater =
-      Number(
-        flows.greywater_gal ?? 0
-      );
-
-    const blackwater =
-      Number(
-        flows.blackwater_gal ?? 0
-      );
-
-    addListItem(
-      list,
-      "Total wastewater",
-      `${formatAmount(
-        greywater + blackwater
-      )} gal / day`
-    );
-  }
-
-  // ============================================================
-  // Map object inspector
-  // ============================================================
-
-  function clearMapSelection() {
-    landGrid
-      .querySelectorAll(
-        ".is-map-selected"
-      )
-      .forEach((element) => {
-        element.classList.remove(
-          "is-map-selected"
-        );
-      });
-  }
-
-  function markSelectedTile(
-    column,
-    row
-  ) {
-    clearMapSelection();
-
-    const cell =
-      landGrid.querySelector(
-        `.grid-cell[data-column="${column}"][data-row="${row}"]`
-      );
-
-    cell?.classList.add(
-      "is-map-selected"
-    );
-  }
-
-  function markSelectedInstance(
-    instanceId
-  ) {
-    clearMapSelection();
-
-    const sprite =
-      landGrid.querySelector(
-        `.placed-building[data-instance-id="${instanceId}"]`
-      );
-
-    sprite?.classList.add(
-      "is-map-selected"
-    );
-  }
-
-  function makeInspectorSection(
-    title,
-    rows
-  ) {
-    if (!rows.length) {
-      return null;
-    }
-
-    const section =
-      document.createElement(
-        "section"
-      );
-
-    section.className =
-      "object-inspector-section";
-
-    const heading =
-      document.createElement("h3");
-
-    heading.textContent =
-      title;
-
-    section.appendChild(
-      heading
-    );
-
-    const list =
-      document.createElement("dl");
-
-    list.className =
-      "object-inspector-stats";
-
-    rows.forEach(
-      ([label, value]) => {
-        const term =
-          document.createElement(
-            "dt"
-          );
-
-        const detail =
-          document.createElement(
-            "dd"
-          );
-
-        term.textContent =
-          label;
-
-        detail.textContent =
-          String(
-            value ?? "—"
-          );
-
-        list.append(
-          term,
-          detail
-        );
-      }
-    );
-
-    section.appendChild(
-      list
-    );
-
-    return section;
-  }
-
-  function openInspector({
-    title,
-    subtitle,
-    genericRows = [],
-    rateRows = [],
-    stateRows = [],
-    operationRows = [],
-  }) {
-    inspectorTitle.textContent =
-      title;
-
-    inspectorSubtitle.textContent =
-      subtitle;
-
-    inspectorContent.replaceChildren();
-
-    [
-      [
-        "General",
-        genericRows,
-      ],
-      [
-        "Rates",
-        rateRows,
-      ],
-      [
-        "Current status",
-        stateRows,
-      ],
-      [
-        "Current operation",
-        operationRows,
-      ],
-    ].forEach(
-      ([sectionTitle, rows]) => {
-        const section =
-          makeInspectorSection(
-            sectionTitle,
-            rows
-          );
-
-        if (section) {
-          inspectorContent.appendChild(
-            section
-          );
-        }
-      }
-    );
-
-    inspectorOverlay.hidden =
-      false;
-
-    inspectorCloseButton.focus();
-  }
-
-  function closeInspector() {
-    inspectorOverlay.hidden =
-      true;
-
-    clearMapSelection();
-  }
-
-  function inspectFacility(
-    instanceId
-  ) {
-    const instance =
-      simulationState
-        ?.instances
-        ?.find(
-          (candidate) =>
-            candidate.instance_id ===
-            instanceId
-        );
-
-    if (!instance) {
-      return;
-    }
-
-    const definition =
-      definitionsById.get(
-        instance.facility_id
-      );
-
-    if (!definition) {
-      return;
-    }
-
-    markSelectedInstance(
-      instance.instance_id
-    );
-
-    const condition =
-      Number(
-        instance.condition ?? 1
-      );
-
-    const stateRows = [
-      [
-        "Instance",
-        instance.instance_id,
-      ],
-      [
-        "Location",
-        `row ${instance.row + 1}, column ${instance.column + 1}`,
-      ],
-      [
-        "Condition",
-        `${formatAmount(
-          condition * 100
-        )}%`,
-      ],
-      [
-        "Deterioration",
-        `${formatAmount(
-          (1 - condition) * 100
-        )}%`,
-      ],
-      [
-        "Accrued labor",
-        `${formatAmount(
-          instance.accrued_labor_requirement ?? 0
-        )} h`,
-      ],
-    ];
-
-    const container =
-      definition.container ??
-      null;
-
-    if (container) {
-      const capacity =
-        container.capacity;
-
-      const unit =
-        container.unit ??
-        container.capacity_unit ??
-        "";
-
-      if (
-        capacity != null
-      ) {
-        stateRows.push([
-          "Capacity",
-          `${formatAmount(
-            capacity
-          )}${unit ? ` ${unit}` : ""}`,
-        ]);
-      }
-
-      if (
-        instance.current_fill != null
-      ) {
-        stateRows.push([
-          "Current fill",
-          `${formatAmount(
-            instance.current_fill
-          )}${unit ? ` ${unit}` : ""}`,
-        ]);
-      }
-    }
-
-    const processStates =
-      definition
-        .process
-        ?.process_states ??
-      [];
-
-    processStates.forEach(
-      (stateName) => {
-        if (
-          instance[stateName] !=
-          null
-        ) {
-          stateRows.push([
-            prettyName(
-              stateName
-            ),
-            formatInspectorValue(
-              instance[stateName]
-            ),
-          ]);
-        }
-      }
-    );
-
-    const operationRows =
-      instance.last_operation
-        ? flattenObject(
-            instance.last_operation
-          )
-        : [
-            [
-              "Status",
-              "Awaiting first tick",
-            ],
-          ];
-
-    openInspector({
-      title:
-        definition.name,
-
-      subtitle:
-        `${instance.width * 5} × ` +
-        `${instance.height * 5} ft facility`,
-
-      genericRows:
-        genericDefinitionRows(
-          definition
-        ),
-
-      rateRows:
-        extractRates(
-          definition
-        ),
-
-      stateRows,
-      operationRows,
-    });
-  }
-
-  function inspectDefaultTile(
-    column,
-    row
-  ) {
-    const defaultTileId =
-      simulationState
-        ?.map
-        ?.default_tile ??
-      "grass-tile";
-
-    const definition =
-      definitionsById.get(
-        defaultTileId
-      );
-
-    if (!definition) {
-      return;
-    }
-
-    markSelectedTile(
-      column,
-      row
-    );
-
-    const tileState =
-      simulationState
-        ?.tile_states
-        ?.find(
-          (tile) => {
-            const tileColumn =
-              tile.column ??
-              tile.x;
-
-            const tileRow =
-              tile.row ??
-              tile.y;
-
-            return (
-              tileColumn ===
-                column &&
-              tileRow ===
-                row
-            );
-          }
-        );
-
-    const stateRows = [
-      [
-        "Location",
-        `row ${row + 1}, column ${column + 1}`,
-      ],
-      [
-        "Land state",
-        tileState
-          ? "Explicit tile state"
-          : "Unimproved grass",
-      ],
-      [
-        "Condition",
-        "Not individually tracked",
-      ],
-    ];
-
-    if (tileState) {
-      flattenObject(
-        tileState
-      )
-        .filter(
-          ([label]) =>
-            ![
-              "Column",
-              "Row",
-              "X",
-              "Y",
-              "Type",
-            ].includes(
-              label
-            )
-        )
-        .forEach(
-          (rowValue) => {
-            stateRows.push(
-              rowValue
-            );
-          }
-        );
-    }
-
-    openInspector({
-      title:
-        definition.name ??
-        prettyName(
-          defaultTileId
-        ),
-
-      subtitle:
-        `5 × 5 ft tile · row ${row + 1}, column ${column + 1}`,
-
-      genericRows:
-        genericDefinitionRows(
-          definition
-        ),
-
-      rateRows:
-        extractRates(
-          definition
-        ),
-
-      stateRows,
-
-      operationRows: [
-        [
-          "Status",
-          "Active default land tile",
-        ],
-      ],
-    });
-  }
-
-  inspectorCloseButton
-    .addEventListener(
-      "click",
-      closeInspector
-    );
-
-  inspectorOverlay
-    .addEventListener(
-      "click",
-      (event) => {
-        if (
-          event.target ===
-          inspectorOverlay
-        ) {
-          closeInspector();
-        }
-      }
-    );
-
-  // ============================================================
-  // Resource display
-  // ============================================================
-
-  function renderResources() {
-    const resourceList =
-      document.getElementById(
-        "resource-list"
-      );
-
-    resourceList.replaceChildren();
-
-    Object.entries(
-      simulationState
-        ?.resources ??
-      {}
-    ).forEach(
-      ([
-        resourceId,
-        resource,
-      ]) => {
-        const item =
-          document.createElement(
-            "li"
-          );
-
-        item.textContent =
-          `${resource.name}: ` +
-          `${formatAmount(
-            resource.amount
-          )} ${resource.unit}`;
-
-        resourceList.appendChild(
-          item
-        );
-      }
-    );
-  }
-
-  function formatFlows(
-    flows = {}
-  ) {
-    return Object.entries(
-      flows ?? {}
-    )
-      .map(
-        ([
-          resourceId,
-          amount,
-        ]) => {
-          const resource =
-            simulationState
-              ?.resources
-              ?.[resourceId];
-
-          if (!resource) {
-            return (
-              `${formatAmount(
-                amount
-              )} ${resourceId}`
-            );
-          }
-
-          return (
-            `${formatAmount(
-              amount
-            )} ` +
-            `${resource.unit} ` +
-            `${resource.name.toLowerCase()}`
-          );
-        }
-      )
-      .join(", ");
-  }
-
-  // ============================================================
-  // Facility operations
-  // ============================================================
-
-  function renderOperations() {
-    const list =
-      document.getElementById(
-        "facility-status-list"
-      );
-
-    list.replaceChildren();
-
-    if (
-      !simulationState
-        ?.instances
-        ?.length
-    ) {
-      const item =
-        document.createElement(
-          "li"
-        );
-
-      item.textContent =
-        "No facilities placed.";
-
-      list.appendChild(
-        item
-      );
-
-      return;
-    }
-
-    simulationState.instances
-      .forEach(
-        (instance) => {
-          const definition =
-            definitionsById.get(
-              instance.facility_id
-            );
-
-          const item =
-            document.createElement(
-              "li"
-            );
-
-          const heading =
-            document.createElement(
-              "strong"
-            );
-
-          heading.textContent =
-            `${definition?.name ??
-              instance.facility_id} · ` +
-            `${instance.instance_id}`;
-
-          item.appendChild(
-            heading
-          );
-
-          const detail =
-            document.createElement(
-              "span"
-            );
-
-          const operation =
-            instance.last_operation;
-
-          if (!operation) {
-            detail.textContent =
-              `Tile ${instance.row + 1}, ` +
-              `${instance.column + 1} · ` +
-              "awaiting first tick";
-          } else {
-            const consumed =
-              operation.consumed ??
-              {};
-
-            const produced =
-              operation.produced ??
-              {};
-
-            const flows = [];
-
-            if (
-              Object.keys(
-                consumed
-              ).length
-            ) {
-              flows.push(
-                `used ${formatFlows(
-                  consumed
-                )}`
-              );
-            }
-
-            if (
-              Object.keys(
-                produced
-              ).length
-            ) {
-              flows.push(
-                `made ${formatFlows(
-                  produced
-                )}`
-              );
-            }
-
-            let statusText;
-
-            if (
-              operation.status ===
-              "operating"
-            ) {
-              statusText =
-                operation
-                  .utilization_pct !=
-                null
-                  ? `Operating ${operation.utilization_pct}%`
-                  : "Operating";
-            } else if (
-              operation.status ===
-              "collecting"
-            ) {
-              statusText =
-                "Collecting";
-            } else if (
-              operation.status ===
-              "full"
-            ) {
-              statusText =
-                "Full";
-            } else if (
-              operation.status ===
-              "error"
-            ) {
-              statusText =
-                `Error: ${
-                  operation.reason ??
-                  "unknown error"
-                }`;
-            } else {
-              statusText =
-                `Idle${
-                  operation.reason
-                    ? `: ${operation.reason}`
-                    : ""
-                }`;
-            }
-
-            let laborText =
-              "";
-
-            if (
-              operation
-                .labor_used !=
-              null
-            ) {
-              laborText =
-                ` · ${formatAmount(
-                  operation.labor_used
-                )} labor h`;
-            } else if (
-              operation
-                .accrued_labor_requirement !=
-              null
-            ) {
-              laborText =
-                ` · ${formatAmount(
-                  operation
-                    .accrued_labor_requirement
-                )} labor h accrued`;
-            }
-
-            detail.textContent =
-              `Tile ${instance.row + 1}, ` +
-              `${instance.column + 1} · ` +
-              `${statusText}` +
-              laborText +
-              (
-                flows.length
-                  ? ` · ${flows.join("; ")}`
-                  : ""
-              );
-          }
-
-          item.appendChild(
-            detail
-          );
-
-          list.appendChild(
-            item
-          );
-        }
-      );
-  }
-
-  // ============================================================
-  // Render placed facility
-  // ============================================================
-
-  function renderInstance(
-    instance
-  ) {
-    const definition =
-      definitionsById.get(
-        instance.facility_id
-      );
-
-    if (!definition) {
-      return;
-    }
-
-    const sprite =
-      document.createElement(
-        "img"
-      );
-
-    sprite.className =
-      "building-sprite placed-building";
-
-    sprite.dataset.instanceId =
-      instance.instance_id;
-
-    sprite.src =
-      `/static/assets/sprites/${definition.image}`;
-
-    sprite.alt =
-      `${definition.name}, ` +
-      `${instance.width * 5} by ` +
-      `${instance.height * 5} feet`;
-
-    sprite.draggable =
-      false;
-
-    sprite.style.gridColumn =
-      `${instance.column + 1} / ` +
-      `span ${instance.width}`;
-
-    sprite.style.gridRow =
-      `${instance.row + 1} / ` +
-      `span ${instance.height}`;
-
     landGrid.appendChild(
-      sprite
-    );
-
-    placements.push(
-      instance
+      preview
     );
   }
 
-  // ============================================================
-  // Main state render
-  // ============================================================
-
-  function renderState() {
-    if (!simulationState) {
-      return;
-    }
-
-    setDateAndClock(
-      simulationState
-        .current_time
-    );
-
-    renderHouseholdSummary();
-    renderConsumption();
-    renderWasteWater();
-    renderResources();
-    renderOperations();
-  }
-
-  // ============================================================
-  // API helper
-  // ============================================================
-
-  async function requestJson(
-    url,
-    options = {}
+  function selectBuild(
+    facilityId
   ) {
-    const response =
-      await fetch(
-        url,
-        options
-      );
+    selectedBuildId =
+      facilityId;
 
-    let result;
+    closeInspector();
+    clearMapSelection();
 
-    try {
-      result =
-        await response.json();
-    } catch {
-      throw new Error(
-        `Server returned an invalid response (${response.status}).`
-      );
-    }
+    cancelButton.disabled =
+      false;
 
-    if (!response.ok) {
-      throw new Error(
-        result.error ||
-        "Simulation request failed."
-      );
-    }
-
-    return result;
-  }
-
-  // ============================================================
-  // Build menu
-  // ============================================================
-
-  function createBuildOptions(
-    definitions
-  ) {
-    buildList.replaceChildren();
-    definitionsById.clear();
-
-    definitions.forEach(
-      (definition) => {
-        definitionsById.set(
-          definition.id,
-          definition
-        );
-
-        const button =
-          document.createElement(
-            "button"
-          );
-
-        button.className =
-          "build-option";
-
-        button.type =
-          "button";
-
-        button.dataset.building =
-          definition.id;
-
-        button.setAttribute(
-          "aria-pressed",
-          "false"
-        );
-
-        const image =
-          document.createElement(
-            "img"
-          );
-
-        image.src =
-          `/static/assets/sprites/${definition.image}`;
-
-        image.alt =
-          "";
-
-        const label =
-          document.createElement(
-            "span"
-          );
-
-        const name =
-          document.createElement(
-            "strong"
-          );
-
-        name.textContent =
-          definition.name;
-
-        const size =
-          document.createElement(
-            "small"
-          );
-
-        size.textContent =
-          `${definition.width * 5} × ` +
-          `${definition.height * 5} ft`;
-
-        label.append(
-          name,
-          size
-        );
-
-        button.append(
-          image,
-          label
-        );
-
-        buildList.appendChild(
-          button
-        );
-      }
-    );
-
-    buildList
+    document
       .querySelectorAll(
         ".build-option"
       )
       .forEach(
         (button) => {
-          button.addEventListener(
-            "click",
-            () => {
-              selectedId =
-                button
-                  .dataset
-                  .building;
-
-              closeInspector();
-
-              buildList
-                .querySelectorAll(
-                  ".build-option"
-                )
-                .forEach(
-                  (option) => {
-                    option.setAttribute(
-                      "aria-pressed",
-                      String(
-                        option ===
-                        button
-                      )
-                    );
-                  }
-                );
-
-              cancelButton.disabled =
-                false;
-
-              const building =
-                footprint();
-
-              if (!building) {
-                return;
-              }
-
-              status.textContent =
-                `${building.name} selected ` +
-                `(${building.width * 5} × ` +
-                `${building.height * 5} ft). ` +
-                "Click an open tile to place.";
-
-              if (
-                hoverPosition
-              ) {
-                showPreview(
-                  hoverPosition.column,
-                  hoverPosition.row
-                );
-              }
-            }
+          button.setAttribute(
+            "aria-pressed",
+            button.dataset.facilityId ===
+              facilityId
+              ? "true"
+              : "false"
           );
         }
       );
+
+    statusLine.textContent =
+      `Place ${
+        definitionsById.get(
+          facilityId
+        )?.name ??
+        facilityId
+      } on the map.`;
   }
-
-  // ============================================================
-  // Clear/reset game rendering
-  // ============================================================
-
-  function clearRenderedGame() {
-    selectedId = null;
-    hoverPosition = null;
-
-    removePreview();
-    closeInspector();
-
-    placements.length = 0;
-
-    landGrid
-      .querySelectorAll(
-        ".placed-building"
-      )
-      .forEach(
-        (sprite) => {
-          sprite.remove();
-        }
-      );
-
-    buildList.replaceChildren();
-    definitionsById.clear();
-
-    cancelButton.disabled =
-      true;
-
-    tickButton.disabled =
-      true;
-  }
-
-  // ============================================================
-  // Initialize selected game
-  // ============================================================
-
-  function initializeSimulation(
-    state,
-    gameName = "Current Game"
-  ) {
-    clearRenderedGame();
-    resetMapView();
-
-    simulationState =
-      state;
-
-    currentGameName.textContent =
-      gameName;
-
-    createBuildOptions(
-      simulationState
-        .facility_definitions ??
-        []
-    );
-
-    (
-      simulationState
-        .instances ??
-      []
-    ).forEach(
-      renderInstance
-    );
-
-    renderState();
-
-    tickButton.disabled =
-      false;
-
-    startupOverlay.hidden =
-      true;
-
-    status.textContent =
-      "Click a map tile or facility to inspect it, or select a structure to build.";
-  }
-
-  // ============================================================
-  // Startup controls
-  // ============================================================
-
-  function setStartupBusy(
-    isBusy
-  ) {
-    newGameButton.disabled =
-      isBusy;
-
-    loadGameButton.disabled =
-      isBusy;
-
-    backToStartButton.disabled =
-      isBusy;
-
-    saveGameList
-      .querySelectorAll(
-        "button"
-      )
-      .forEach(
-        (button) => {
-          button.disabled =
-            isBusy;
-        }
-      );
-  }
-
-  function showStartupMain() {
-    loadGamePanel.hidden =
-      true;
-
-    startupMainActions.hidden =
-      false;
-
-    startupStatus.textContent =
-      "";
-  }
-
-  async function startNewGame() {
-    setStartupBusy(
-      true
-    );
-
-    startupStatus.textContent =
-      "Starting a new game...";
-
-    try {
-      const result =
-        await requestJson(
-          "/api/new-game",
-          {
-            method: "POST",
-          }
-        );
-
-      initializeSimulation(
-        result.state,
-        result.game_name ??
-          "New Game"
-      );
-    } catch (error) {
-      startupStatus.textContent =
-        error.message;
-    } finally {
-      setStartupBusy(
-        false
-      );
-    }
-  }
-
-  function makeSaveButton(
-    save
-  ) {
-    const button =
-      document.createElement(
-        "button"
-      );
-
-    button.type =
-      "button";
-
-    button.className =
-      "save-game-option";
-
-    const title =
-      document.createElement(
-        "strong"
-      );
-
-    title.textContent =
-      save.label ||
-      save.filename;
-
-    const path =
-      document.createElement(
-        "small"
-      );
-
-    path.textContent =
-      save.path ||
-      save.filename;
-
-    button.append(
-      title,
-      path
-    );
-
-    button.addEventListener(
-      "click",
-      async () => {
-        setStartupBusy(
-          true
-        );
-
-        startupStatus.textContent =
-          `Loading ${save.filename}...`;
-
-        try {
-          const result =
-            await requestJson(
-              "/api/load-game",
-              {
-                method:
-                  "POST",
-
-                headers: {
-                  "Content-Type":
-                    "application/json",
-                },
-
-                body:
-                  JSON.stringify({
-                    save_id:
-                      save.id,
-                  }),
-              }
-            );
-
-          initializeSimulation(
-            result.state,
-            result.game_name ??
-              save.label ??
-              save.filename
-          );
-        } catch (error) {
-          startupStatus.textContent =
-            error.message;
-        } finally {
-          setStartupBusy(
-            false
-          );
-        }
-      }
-    );
-
-    return button;
-  }
-
-  async function showLoadGamePanel() {
-    setStartupBusy(
-      true
-    );
-
-    startupStatus.textContent =
-      "Looking for saved games...";
-
-    try {
-      const result =
-        await requestJson(
-          "/api/saves"
-        );
-
-      const saves =
-        result.saves ??
-        [];
-
-      saveGameList.replaceChildren();
-
-      if (!saves.length) {
-        const empty =
-          document.createElement(
-            "p"
-          );
-
-        empty.className =
-          "no-saves-message";
-
-        empty.textContent =
-          "No saved games were found.";
-
-        saveGameList.appendChild(
-          empty
-        );
-      } else {
-        saves.forEach(
-          (save) => {
-            saveGameList.appendChild(
-              makeSaveButton(
-                save
-              )
-            );
-          }
-        );
-      }
-
-      startupMainActions.hidden =
-        true;
-
-      loadGamePanel.hidden =
-        false;
-
-      startupStatus.textContent =
-        "";
-    } catch (error) {
-      startupStatus.textContent =
-        error.message;
-    } finally {
-      setStartupBusy(
-        false
-      );
-    }
-  }
-
-  newGameButton
-    .addEventListener(
-      "click",
-      startNewGame
-    );
-
-  loadGameButton
-    .addEventListener(
-      "click",
-      showLoadGamePanel
-    );
-
-  backToStartButton
-    .addEventListener(
-      "click",
-      showStartupMain
-    );
-
-  // ============================================================
-  // Left-side tabs
-  // ============================================================
-
-  function activateInfoPanel(
-    panelId
-  ) {
-    infoTabs.forEach(
-      (tab) => {
-        const active =
-          tab.dataset.panel ===
-          panelId;
-
-        tab.classList.toggle(
-          "is-active",
-          active
-        );
-
-        tab.setAttribute(
-          "aria-selected",
-          String(
-            active
-          )
-        );
-      }
-    );
-
-    infoPanels.forEach(
-      (panel) => {
-        const active =
-          panel.id ===
-          panelId;
-
-        panel.classList.toggle(
-          "is-active",
-          active
-        );
-
-        panel.hidden =
-          !active;
-      }
-    );
-  }
-
-  infoTabs.forEach(
-    (tab) => {
-      tab.addEventListener(
-        "click",
-        () => {
-          activateInfoPanel(
-            tab.dataset.panel
-          );
-        }
-      );
-    }
-  );
-
-  // ============================================================
-  // Map hover: building placement preview only
-  // ============================================================
-
-  landGrid.addEventListener(
-    "pointerover",
-    (event) => {
-      if (!selectedId) {
-        return;
-      }
-
-      const cell =
-        event.target.closest(
-          ".grid-cell"
-        );
-
-      if (!cell) {
-        return;
-      }
-
-      showPreview(
-        Number(
-          cell.dataset.column
-        ),
-        Number(
-          cell.dataset.row
-        )
-      );
-    }
-  );
-
-  // ============================================================
-  // Map click: inspect or place
-  // ============================================================
-
-  landGrid.addEventListener(
-    "click",
-    async (event) => {
-      if (!simulationState) {
-        return;
-      }
-
-      /*
-       * A drag is followed by a synthetic click in most browsers.
-       * Ignore exactly one click after a genuine map pan.
-       */
-      if (
-        suppressNextMapClick
-      ) {
-        suppressNextMapClick =
-          false;
-
-        return;
-      }
-
-      const placedSprite =
-        event.target.closest(
-          ".placed-building"
-        );
-
-      /*
-       * No build tool selected:
-       * inspect the object occupying the clicked location.
-       */
-      if (!selectedId) {
-        if (placedSprite) {
-          inspectFacility(
-            placedSprite
-              .dataset
-              .instanceId
-          );
-
-          return;
-        }
-
-        const cell =
-          event.target.closest(
-            ".grid-cell"
-          );
-
-        if (!cell) {
-          return;
-        }
-
-        inspectDefaultTile(
-          Number(
-            cell.dataset.column
-          ),
-          Number(
-            cell.dataset.row
-          )
-        );
-
-        return;
-      }
-
-      /*
-       * Build tool selected:
-       * left-click retains placement behavior.
-       */
-      if (placedSprite) {
-        status.textContent =
-          "That area is already occupied.";
-
-        return;
-      }
-
-      const cell =
-        event.target.closest(
-          ".grid-cell"
-        );
-
-      const building =
-        footprint();
-
-      if (
-        !cell ||
-        !building
-      ) {
-        return;
-      }
-
-      const column =
-        Number(
-          cell.dataset.column
-        );
-
-      const row =
-        Number(
-          cell.dataset.row
-        );
-
-      if (
-        !canPlace(
-          column,
-          row,
-          building.width,
-          building.height
-        )
-      ) {
-        status.textContent =
-          "That footprint is out of bounds or overlaps another structure.";
-
-        return;
-      }
-
-      try {
-        const instance =
-          await requestJson(
-            "/api/facilities",
-            {
-              method:
-                "POST",
-
-              headers: {
-                "Content-Type":
-                  "application/json",
-              },
-
-              body:
-                JSON.stringify({
-                  facility_id:
-                    selectedId,
-                  column,
-                  row,
-                }),
-            }
-          );
-
-        if (
-          !simulationState
-            .instances
-        ) {
-          simulationState.instances =
-            [];
-        }
-
-        simulationState.instances.push(
-          instance
-        );
-
-        renderInstance(
-          instance
-        );
-
-        renderOperations();
-
-        status.textContent =
-          `${building.name} placed at ` +
-          `tile ${row + 1}, ` +
-          `${column + 1}.`;
-
-        showPreview(
-          column,
-          row
-        );
-      } catch (error) {
-        status.textContent =
-          error.message;
-      }
-    }
-  );
-
-  // ============================================================
-  // Advance one hour
-  // ============================================================
-
-  tickButton.addEventListener(
-    "click",
-    async () => {
-      if (!simulationState) {
-        return;
-      }
-
-      tickButton.disabled =
-        true;
-
-      try {
-        const result =
-          await requestJson(
-            "/api/tick",
-            {
-              method:
-                "POST",
-            }
-          );
-
-        simulationState =
-          result.state;
-
-        renderState();
-
-        const operations =
-          result.operations ??
-          [];
-
-        const operating =
-          operations.filter(
-            (operation) =>
-              operation.status ===
-              "operating"
-          ).length;
-
-        const processedLabel =
-          result.state
-            ?.current_time
-            ? new Date(
-                result
-                  .state
-                  .current_time
-              ).toLocaleString()
-            : (
-                `day ${
-                  result
-                    .processed_at
-                    ?.day ??
-                  "?"
-                }, hour ${
-                  result
-                    .processed_at
-                    ?.hour ??
-                  "?"
-                }`
-              );
-
-        status.textContent =
-          `Hour processed: ` +
-          `${processedLabel}. ` +
-          `${operating} of ` +
-          `${operations.length} ` +
-          "operations active.";
-      } catch (error) {
-        status.textContent =
-          error.message;
-      } finally {
-        tickButton.disabled =
-          false;
-      }
-    }
-  );
-
-  // ============================================================
-  // Cancel placement
-  // ============================================================
 
   function cancelPlacement() {
-    selectedId =
-      null;
+    selectedBuildId = null;
 
     removePreview();
 
-    buildList
+    cancelButton.disabled = true;
+
+    document
       .querySelectorAll(
         ".build-option"
       )
@@ -2624,13 +720,10 @@ if (landGrid) {
         }
       );
 
-    cancelButton.disabled =
-      true;
-
-    status.textContent =
-      simulationState
-        ? "Click a map tile or facility to inspect it, or select a structure to build."
-        : "Choose New Game or Load Game to begin.";
+    if (gameLoaded) {
+      statusLine.textContent =
+        "Select a tile or facility to interact.";
+    }
   }
 
   cancelButton.addEventListener(
@@ -2638,73 +731,1544 @@ if (landGrid) {
     cancelPlacement
   );
 
+  async function placeSelectedFacility(
+    column,
+    row
+  ) {
+    const definition =
+      definitionsById.get(
+        selectedBuildId
+      );
+
+    if (
+      !definition ||
+      !canPlace(
+        column,
+        row,
+        definition.width,
+        definition.height
+      )
+    ) {
+      statusLine.textContent =
+        "That structure cannot be placed there.";
+
+      return;
+    }
+
+    try {
+      const result =
+        await api(
+          "/api/facilities",
+          {
+            method: "POST",
+            body: JSON.stringify({
+              facility_id:
+                selectedBuildId,
+              column,
+              row,
+            }),
+          }
+        );
+
+      renderState(
+        result.state
+      );
+
+      cancelPlacement();
+
+      statusLine.textContent =
+        `${definition.name} placed.`;
+    } catch (error) {
+      statusLine.textContent =
+        error.message;
+    }
+  }
+
+  function renderBuildList() {
+    buildList.replaceChildren();
+
+    const defaultTile =
+      simulationState?.map
+        ?.default_tile;
+
+    for (
+      const definition
+      of simulationState
+        ?.facility_definitions ??
+      []
+    ) {
+      definitionsById.set(
+        definition.id,
+        definition
+      );
+
+      if (
+        definition.id ===
+        defaultTile
+      ) {
+        continue;
+      }
+
+      const button =
+        document.createElement(
+          "button"
+        );
+
+      button.type = "button";
+      button.className =
+        "build-option";
+
+      button.dataset.facilityId =
+        definition.id;
+
+      button.setAttribute(
+        "aria-pressed",
+        definition.id ===
+          selectedBuildId
+          ? "true"
+          : "false"
+      );
+
+      const image =
+        document.createElement(
+          "img"
+        );
+
+      image.src =
+        `/static/assets/sprites/${definition.image}`;
+
+      image.alt = "";
+
+      const text =
+        document.createElement(
+          "span"
+        );
+
+      const name =
+        document.createElement(
+          "strong"
+        );
+
+      name.textContent =
+        definition.name;
+
+      const size =
+        document.createElement(
+          "small"
+        );
+
+      size.textContent =
+        `${definition.width} × ${definition.height} tiles`;
+
+      text.append(
+        name,
+        size
+      );
+
+      button.append(
+        image,
+        text
+      );
+
+      button.addEventListener(
+        "click",
+        () => {
+          selectBuild(
+            definition.id
+          );
+        }
+      );
+
+      buildList.appendChild(
+        button
+      );
+    }
+  }
+
   // ============================================================
-  // Keyboard
+  // Selection / interaction popup
   // ============================================================
+
+  function clearMapSelection() {
+    landGrid
+      .querySelectorAll(
+        ".is-map-selected"
+      )
+      .forEach(
+        (element) => {
+          element.classList.remove(
+            "is-map-selected"
+          );
+        }
+      );
+  }
+
+  function facilityAt(
+    column,
+    row
+  ) {
+    return (
+      placements.find(
+        (instance) =>
+          column >=
+            instance.column &&
+          column <
+            instance.column +
+              instance.width &&
+          row >=
+            instance.row &&
+          row <
+            instance.row +
+              instance.height
+      ) ??
+      null
+    );
+  }
+
+  function markMapSelection(
+    column,
+    row,
+    instance
+  ) {
+    clearMapSelection();
+
+    if (instance) {
+      landGrid
+        .querySelector(
+          `[data-instance-id="${
+            CSS.escape(
+              instance.instance_id
+            )
+          }"]`
+        )
+        ?.classList.add(
+          "is-map-selected"
+        );
+    } else {
+      landGrid
+        .querySelector(
+          `.grid-cell[data-column="${column}"][data-row="${row}"]`
+        )
+        ?.classList.add(
+          "is-map-selected"
+        );
+    }
+  }
+
+  function renderSelectionSummary(
+    selection
+  ) {
+    inspectorContent.replaceChildren();
+
+    const dl =
+      document.createElement(
+        "dl"
+      );
+
+    dl.className =
+      "selection-summary";
+
+    const rows = [
+      [
+        "Tile",
+        `(${selection.column + 1}, ${selection.row + 1})`,
+      ],
+      [
+        "Type",
+        selection.instance
+          ? "Facility"
+          : "Grass tile",
+      ],
+    ];
+
+    if (selection.instance) {
+      rows.push([
+        "Condition",
+        `${formatAmount(
+          (
+            selection.instance
+              .condition ??
+            1
+          ) * 100,
+          1
+        )}%`,
+      ]);
+
+      rows.push([
+        "Accrued labor",
+        `${formatAmount(
+          selection.instance
+            .accrued_labor_requirement ??
+          0,
+          3
+        )} h`,
+      ]);
+
+      if (
+        selection.instance
+          .current_fill != null
+      ) {
+        rows.push([
+          "Current fill",
+          formatAmount(
+            selection.instance
+              .current_fill
+          ),
+        ]);
+      }
+
+      if (
+        selection.instance
+          .feedstock_mass != null
+      ) {
+        rows.push([
+          "Feedstock",
+          `${formatAmount(
+            selection.instance
+              .feedstock_mass
+          )} lb`,
+        ]);
+      }
+
+      if (
+        selection.instance
+          .larval_biomass != null
+      ) {
+        rows.push([
+          "Larval biomass",
+          `${formatAmount(
+            selection.instance
+              .larval_biomass
+          )} lb`,
+        ]);
+      }
+
+      if (
+        selection.instance
+          .raw_material_mass != null
+      ) {
+        rows.push([
+          "Raw material",
+          `${formatAmount(
+            selection.instance
+              .raw_material_mass
+          )} lb`,
+        ]);
+      }
+    }
+
+    for (
+      const [label, value]
+      of rows
+    ) {
+      const dt =
+        document.createElement(
+          "dt"
+        );
+
+      const dd =
+        document.createElement(
+          "dd"
+        );
+
+      dt.textContent = label;
+      dd.textContent = value;
+
+      dl.append(
+        dt,
+        dd
+      );
+    }
+
+    inspectorContent.appendChild(
+      dl
+    );
+  }
+
+  function openSelection(
+    column,
+    row
+  ) {
+    const instance =
+      facilityAt(
+        column,
+        row
+      );
+
+    const definition =
+      instance
+        ? definitionsById.get(
+            instance.facility_id
+          )
+        : definitionsById.get(
+            simulationState?.map
+              ?.default_tile
+          );
+
+    selectedMapObject = {
+      column,
+      row,
+      instance,
+      definition,
+    };
+
+    markMapSelection(
+      column,
+      row,
+      instance
+    );
+
+    inspectorTitle.textContent =
+      definition?.name ??
+      (
+        instance
+          ? "Facility"
+          : "Grass Tile"
+      );
+
+    inspectorSubtitle.textContent =
+      instance
+        ? `Facility instance ${instance.instance_id}`
+        : `Map tile ${column + 1}, ${row + 1}`;
+
+    renderSelectionSummary(
+      selectedMapObject
+    );
+
+    inspectorOverlay.hidden =
+      false;
+
+    walkHereButton.focus();
+  }
+
+  function closeInspector() {
+    inspectorOverlay.hidden =
+      true;
+
+    selectedMapObject =
+      null;
+  }
+
+  inspectorCloseButton.addEventListener(
+    "click",
+    closeInspector
+  );
+
+  inspectorOverlay.addEventListener(
+    "click",
+    (event) => {
+      if (
+        event.target ===
+        inspectorOverlay
+      ) {
+        closeInspector();
+      }
+    }
+  );
+
+  walkHereButton.addEventListener(
+    "click",
+    async () => {
+      if (!selectedMapObject) {
+        return;
+      }
+
+      try {
+        const {
+          column,
+          row,
+        } =
+          selectedMapObject;
+
+        const result =
+          await api(
+            "/api/player/walk",
+            {
+              method: "POST",
+              body: JSON.stringify({
+                column,
+                row,
+              }),
+            }
+          );
+
+        renderState(
+          result.state
+        );
+
+        closeInspector();
+        clearMapSelection();
+
+        statusLine.textContent =
+          result.status ===
+          "already_there"
+            ? "Homesteader is already at that location."
+            : `Walking to tile ${column + 1}, ${row + 1}.`;
+      } catch (error) {
+        statusLine.textContent =
+          error.message;
+      }
+    }
+  );
 
   document.addEventListener(
     "keydown",
     (event) => {
       if (
-        event.key === "+" ||
-        event.key === "="
-      ) {
-        zoomMapBy(
-          ZOOM_STEP
-        );
-
-        return;
-      }
-
-      if (
-        event.key === "-" ||
-        event.key === "_"
-      ) {
-        zoomMapBy(
-          -ZOOM_STEP
-        );
-
-        return;
-      }
-
-      if (
-        event.key === "0"
-      ) {
-        resetMapView();
-
-        return;
-      }
-
-      if (
-        event.key !==
+        event.key ===
         "Escape"
       ) {
-        return;
+        closeInspector();
+        clearMapSelection();
+        cancelPlacement();
       }
 
       if (
-        inspectorOverlay &&
-        !inspectorOverlay.hidden
+        (
+          event.key === "+" ||
+          event.key === "="
+        ) &&
+        !event.target.matches(
+          "input, textarea, select"
+        )
       ) {
-        closeInspector();
-      } else {
-        cancelPlacement();
+        setMapZoom(
+          mapZoom + ZOOM_STEP
+        );
+      }
+
+      if (
+        (
+          event.key === "-" ||
+          event.key === "_"
+        ) &&
+        !event.target.matches(
+          "input, textarea, select"
+        )
+      ) {
+        setMapZoom(
+          mapZoom - ZOOM_STEP
+        );
+      }
+
+      if (
+        event.key === "0" &&
+        !event.target.matches(
+          "input, textarea, select"
+        )
+      ) {
+        resetMapView();
       }
     }
   );
 
   // ============================================================
-  // Initial application state
+  // Avatar
   // ============================================================
 
-  clearRenderedGame();
-  resetMapView();
+  function ensureAvatar() {
+    if (avatar) {
+      return avatar;
+    }
 
-  currentGameName.textContent =
-    "No game loaded";
+    avatar =
+      document.createElement(
+        "img"
+      );
 
-  startupOverlay.hidden =
-    false;
+    avatar.id =
+      "player-avatar";
 
-  showStartupMain();
+    avatar.className =
+      "player-avatar";
+
+    avatar.alt =
+      "Homesteader";
+
+    avatar.src =
+      "/static/assets/sprites/HomesteaderIdle.png";
+
+    landGrid.appendChild(
+      avatar
+    );
+
+    return avatar;
+  }
+
+  function avatarAsset(
+    direction,
+    walking
+  ) {
+    if (!walking) {
+      return "/static/assets/sprites/HomesteaderIdle.png";
+    }
+
+    if (
+      direction === "up"
+    ) {
+      return "/static/assets/sprites/HomesteaderWalkAway.png";
+    }
+
+    if (
+      direction === "down"
+    ) {
+      return "/static/assets/sprites/HomesteaderWalkToward.png";
+    }
+
+    return "/static/assets/sprites/HomesteaderWalkSide.png";
+  }
+
+  function renderAvatar(
+    movement = null
+  ) {
+    const player =
+      simulationState?.player;
+
+    if (!player) {
+      avatar?.remove();
+      avatar = null;
+
+      return;
+    }
+
+    const element =
+      ensureAvatar();
+
+    const column =
+      Number(
+        player.position
+          ?.column ??
+        0
+      );
+
+    const row =
+      Number(
+        player.position
+          ?.row ??
+        GRID_SIZE - 1
+      );
+
+    const activeTask =
+      player.current_task;
+
+    const direction =
+      movement?.direction ??
+      activeTask?.direction ??
+      player.last_direction ??
+      "down";
+
+    const walking =
+      Boolean(
+        activeTask?.type ===
+          "walk" ||
+        movement?.type ===
+          "walk"
+      );
+
+    element.style.left =
+      `${
+        (
+          (column + 0.5) /
+          GRID_SIZE
+        ) * 100
+      }%`;
+
+    element.style.top =
+      `${
+        (
+          (row + 1) /
+          GRID_SIZE
+        ) * 100
+      }%`;
+
+    element.src =
+      avatarAsset(
+        direction,
+        walking
+      );
+
+    element.classList.toggle(
+      "walk-left",
+      walking &&
+        direction ===
+          "left"
+    );
+
+    if (
+      movement?.completed &&
+      !activeTask
+    ) {
+      window.setTimeout(
+        () => {
+          if (
+            simulationState
+              ?.player
+              ?.current_task ==
+              null &&
+            avatar
+          ) {
+            avatar.src =
+              "/static/assets/sprites/HomesteaderIdle.png";
+
+            avatar.classList.remove(
+              "walk-left"
+            );
+          }
+        },
+        850
+      );
+    }
+  }
+
+  // ============================================================
+  // State rendering
+  // ============================================================
+
+  function renderPlacements() {
+    landGrid
+      .querySelectorAll(
+        ".placed-building"
+      )
+      .forEach(
+        (element) => {
+          element.remove();
+        }
+      );
+
+    placements =
+      (
+        simulationState
+          ?.instances ??
+        []
+      ).map(
+        (instance) => ({
+          ...instance,
+        })
+      );
+
+    for (
+      const instance
+      of placements
+    ) {
+      const definition =
+        definitionsById.get(
+          instance.facility_id
+        );
+
+      if (!definition) {
+        continue;
+      }
+
+      const image =
+        document.createElement(
+          "img"
+        );
+
+      image.className =
+        "building-sprite placed-building";
+
+      image.src =
+        `/static/assets/sprites/${definition.image}`;
+
+      image.alt =
+        definition.name;
+
+      image.dataset.instanceId =
+        instance.instance_id;
+
+      image.style.gridColumn =
+        `${
+          instance.column + 1
+        } / span ${
+          instance.width
+        }`;
+
+      image.style.gridRow =
+        `${
+          instance.row + 1
+        } / span ${
+          instance.height
+        }`;
+
+      landGrid.appendChild(
+        image
+      );
+    }
+
+    if (avatar) {
+      landGrid.appendChild(
+        avatar
+      );
+    }
+  }
+
+  function dailyBaseline() {
+    const baseline =
+      simulationState
+        ?.household_baseline_daily ??
+      {};
+
+    const profile =
+      simulationState
+        ?.household_profile ??
+      {};
+
+    return {
+      flows:
+        baseline.daily_flows ??
+        profile.daily_flows ??
+        {},
+
+      electricity:
+        baseline
+          .electricity_kwh_per_day ??
+        profile
+          .electricity_kwh_per_day ??
+        {},
+    };
+  }
+
+  function renderHouseholdPanels() {
+    const profile =
+      simulationState
+        ?.household_profile ??
+      {};
+
+    const householdList =
+      document.getElementById(
+        "household-summary-list"
+      );
+
+    householdList.replaceChildren();
+
+    addListItem(
+      householdList,
+      "Profile",
+      profile.name ??
+        profile.profile_id ??
+        "Default household"
+    );
+
+    addListItem(
+      householdList,
+      "Occupants",
+      formatAmount(
+        profile.occupants
+      )
+    );
+
+    addListItem(
+      householdList,
+      "House size",
+      `${formatAmount(
+        profile.house_sq_ft
+      )} sq ft`
+    );
+
+    addListItem(
+      householdList,
+      "Money",
+      `$${formatAmount(
+        simulationState
+          ?.household
+          ?.money ??
+        0,
+        2
+      )}`
+    );
+
+    const playerList =
+      document.getElementById(
+        "player-status-list"
+      );
+
+    playerList.replaceChildren();
+
+    const player =
+      simulationState?.player;
+
+    if (player) {
+      addListItem(
+        playerList,
+        "Position",
+        `${
+          formatAmount(
+            player.position
+              ?.column,
+            2
+          )
+        }, ${
+          formatAmount(
+            player.position
+              ?.row,
+            2
+          )
+        }`
+      );
+
+      const task =
+        player.current_task;
+
+      addListItem(
+        playerList,
+        "Activity",
+        task?.type === "walk"
+          ? `Walking ${task.direction}`
+          : "Idle"
+      );
+
+      if (task?.target) {
+        addListItem(
+          playerList,
+          "Destination",
+          `${
+            formatAmount(
+              task.target
+                .column,
+              0
+            )
+          }, ${
+            formatAmount(
+              task.target
+                .row,
+              0
+            )
+          }`
+        );
+      }
+    }
+
+    const {
+      flows,
+      electricity,
+    } =
+      dailyBaseline();
+
+    const consumptionList =
+      document.getElementById(
+        "consumption-list"
+      );
+
+    consumptionList.replaceChildren();
+
+    addListItem(
+      consumptionList,
+      "Groceries",
+      `$${formatAmount(
+        flows.groceries_usd,
+        2
+      )} / day`
+    );
+
+    addListItem(
+      consumptionList,
+      "Tap water",
+      `${formatAmount(
+        flows.tap_water_gal
+      )} gal / day`
+    );
+
+    addListItem(
+      consumptionList,
+      "Electricity",
+      `${formatAmount(
+        electricity.total
+      )} kWh / day`
+    );
+
+    const electricityList =
+      document.getElementById(
+        "electricity-breakdown-list"
+      );
+
+    electricityList.replaceChildren();
+
+    for (
+      const [key, value]
+      of Object.entries(
+        electricity
+      )
+    ) {
+      if (
+        key === "total"
+      ) {
+        continue;
+      }
+
+      addListItem(
+        electricityList,
+        prettyName(key),
+        `${formatAmount(
+          value
+        )} kWh / day`
+      );
+    }
+
+    const wasteList =
+      document.getElementById(
+        "waste-water-list"
+      );
+
+    wasteList.replaceChildren();
+
+    for (
+      const [key, value]
+      of Object.entries(
+        flows
+      )
+    ) {
+      if (
+        key ===
+          "groceries_usd" ||
+        key ===
+          "tap_water_gal"
+      ) {
+        continue;
+      }
+
+      const unit =
+        key.endsWith(
+          "_gal"
+        )
+          ? "gal / day"
+          : key.endsWith(
+              "_lb"
+            )
+          ? "lb / day"
+          : "/ day";
+
+      addListItem(
+        wasteList,
+        prettyName(
+          key.replace(
+            /_(gal|lb)$/,
+            ""
+          )
+        ),
+        `${formatAmount(
+          value
+        )} ${unit}`
+      );
+    }
+
+    const resourceList =
+      document.getElementById(
+        "resource-list"
+      );
+
+    resourceList.replaceChildren();
+
+    for (
+      const [id, resource]
+      of Object.entries(
+        simulationState
+          ?.resources ??
+        {}
+      )
+    ) {
+      addListItem(
+        resourceList,
+        resource.name ??
+          prettyName(id),
+        `${
+          formatAmount(
+            resource.amount
+          )
+        } ${
+          resource.unit ??
+          ""
+        }`.trim()
+      );
+    }
+
+    const operationsList =
+      document.getElementById(
+        "facility-status-list"
+      );
+
+    operationsList.replaceChildren();
+
+    if (
+      !placements.length
+    ) {
+      const li =
+        document.createElement(
+          "li"
+        );
+
+      li.textContent =
+        "No placed facilities.";
+
+      operationsList.appendChild(
+        li
+      );
+    } else {
+      for (
+        const instance
+        of placements
+      ) {
+        const definition =
+          definitionsById.get(
+            instance.facility_id
+          );
+
+        const op =
+          instance.last_operation;
+
+        addListItem(
+          operationsList,
+          definition?.name ??
+            instance.facility_id,
+          op?.status ??
+            "Awaiting first hourly tick"
+        );
+      }
+    }
+  }
+
+  function renderState(
+    state,
+    movement = null
+  ) {
+    simulationState = state;
+
+    definitionsById.clear();
+
+    for (
+      const definition
+      of state
+        ?.facility_definitions ??
+      []
+    ) {
+      definitionsById.set(
+        definition.id,
+        definition
+      );
+    }
+
+    setDateAndClock(
+      state
+    );
+
+    renderBuildList();
+    renderPlacements();
+
+    if (
+      selectedMapObject
+    ) {
+      const refreshedInstance =
+        facilityAt(
+          selectedMapObject
+            .column,
+          selectedMapObject
+            .row
+        );
+
+      selectedMapObject.instance =
+        refreshedInstance;
+
+      selectedMapObject.definition =
+        refreshedInstance
+          ? definitionsById.get(
+              refreshedInstance
+                .facility_id
+            )
+          : definitionsById.get(
+              simulationState
+                ?.map
+                ?.default_tile
+            );
+
+      markMapSelection(
+        selectedMapObject
+          .column,
+        selectedMapObject
+          .row,
+        refreshedInstance
+      );
+
+      renderSelectionSummary(
+        selectedMapObject
+      );
+    }
+
+    renderAvatar(
+      movement
+    );
+
+    renderHouseholdPanels();
+  }
+
+  // ============================================================
+  // Map pointer behavior
+  // ============================================================
+
+  landGrid.addEventListener(
+    "pointermove",
+    (event) => {
+      if (
+        !selectedBuildId ||
+        mapDragStarted
+      ) {
+        return;
+      }
+
+      const {
+        column,
+        row,
+      } =
+        mapCoordinatesFromClient(
+          event.clientX,
+          event.clientY
+        );
+
+      showPreview(
+        column,
+        row
+      );
+    }
+  );
+
+  landGrid.addEventListener(
+    "pointerleave",
+    () => {
+      if (
+        selectedBuildId
+      ) {
+        removePreview();
+      }
+    }
+  );
+
+  landGrid.addEventListener(
+    "click",
+    async (event) => {
+      if (!gameLoaded) {
+        return;
+      }
+
+      if (
+        suppressNextMapClick
+      ) {
+        suppressNextMapClick =
+          false;
+
+        return;
+      }
+
+      const {
+        column,
+        row,
+      } =
+        mapCoordinatesFromClient(
+          event.clientX,
+          event.clientY
+        );
+
+      if (
+        selectedBuildId
+      ) {
+        await placeSelectedFacility(
+          column,
+          row
+        );
+
+        return;
+      }
+
+      openSelection(
+        column,
+        row
+      );
+    }
+  );
+
+  // ============================================================
+  // Tabs
+  // ============================================================
+
+  infoTabs.forEach(
+    (tab) => {
+      tab.addEventListener(
+        "click",
+        () => {
+          infoTabs.forEach(
+            (candidate) => {
+              const active =
+                candidate === tab;
+
+              candidate.classList.toggle(
+                "is-active",
+                active
+              );
+
+              candidate.setAttribute(
+                "aria-selected",
+                active
+                  ? "true"
+                  : "false"
+              );
+            }
+          );
+
+          infoPanels.forEach(
+            (panel) => {
+              const active =
+                panel.id ===
+                tab.dataset.panel;
+
+              panel.hidden =
+                !active;
+
+              panel.classList.toggle(
+                "is-active",
+                active
+              );
+            }
+          );
+        }
+      );
+    }
+  );
+
+  // ============================================================
+  // Startup / load
+  // ============================================================
+
+  function setGameLoaded(
+    name,
+    state
+  ) {
+    gameLoaded = true;
+
+    currentGameName.textContent =
+      name ||
+      "Current Game";
+
+    startupOverlay.hidden =
+      true;
+
+    startupStatus.textContent =
+      "";
+
+    renderState(
+      state
+    );
+
+    statusLine.textContent =
+      "Select a tile or facility to interact.";
+
+    startRuntime();
+  }
+
+  async function beginNewGame() {
+    startupStatus.textContent =
+      "Creating new game…";
+
+    newGameButton.disabled =
+      true;
+
+    loadGameButton.disabled =
+      true;
+
+    try {
+      const result =
+        await api(
+          "/api/new-game",
+          {
+            method: "POST",
+            body: "{}",
+          }
+        );
+
+      setGameLoaded(
+        result.game_name,
+        result.state
+      );
+    } catch (error) {
+      startupStatus.textContent =
+        error.message;
+    } finally {
+      newGameButton.disabled =
+        false;
+
+      loadGameButton.disabled =
+        false;
+    }
+  }
+
+  async function showSavedGames() {
+    startupMainActions.hidden =
+      true;
+
+    loadGamePanel.hidden =
+      false;
+
+    startupStatus.textContent =
+      "Loading saved games…";
+
+    saveGameList.replaceChildren();
+
+    try {
+      const result =
+        await api(
+          "/api/saves"
+        );
+
+      if (
+        !result.saves?.length
+      ) {
+        const message =
+          document.createElement(
+            "p"
+          );
+
+        message.className =
+          "no-saves-message";
+
+        message.textContent =
+          "No saved games found.";
+
+        saveGameList.appendChild(
+          message
+        );
+      } else {
+        for (
+          const save
+          of result.saves
+        ) {
+          const button =
+            document.createElement(
+              "button"
+            );
+
+          button.type =
+            "button";
+
+          button.className =
+            "save-game-option";
+
+          button.innerHTML =
+            `<strong></strong><small></small>`;
+
+          button
+            .querySelector(
+              "strong"
+            )
+            .textContent =
+              save.label;
+
+          button
+            .querySelector(
+              "small"
+            )
+            .textContent =
+              save.path;
+
+          button.addEventListener(
+            "click",
+            () => {
+              loadSavedGame(
+                save.id
+              );
+            }
+          );
+
+          saveGameList.appendChild(
+            button
+          );
+        }
+      }
+
+      startupStatus.textContent =
+        "";
+    } catch (error) {
+      startupStatus.textContent =
+        error.message;
+    }
+  }
+
+  async function loadSavedGame(
+    saveId
+  ) {
+    startupStatus.textContent =
+      "Loading game…";
+
+    try {
+      const result =
+        await api(
+          "/api/load-game",
+          {
+            method: "POST",
+            body: JSON.stringify({
+              save_id:
+                saveId,
+            }),
+          }
+        );
+
+      setGameLoaded(
+        result.game_name,
+        result.state
+      );
+    } catch (error) {
+      startupStatus.textContent =
+        error.message;
+    }
+  }
+
+  newGameButton.addEventListener(
+    "click",
+    beginNewGame
+  );
+
+  loadGameButton.addEventListener(
+    "click",
+    showSavedGames
+  );
+
+  backToStartButton.addEventListener(
+    "click",
+    () => {
+      loadGamePanel.hidden =
+        true;
+
+      startupMainActions.hidden =
+        false;
+
+      startupStatus.textContent =
+        "";
+    }
+  );
+
+  async function initialize() {
+    renderMapTransform();
+    setRuntimeRunning(false);
+
+    try {
+      const session =
+        await api(
+          "/api/session"
+        );
+
+      if (
+        session.game_loaded
+      ) {
+        const state =
+          await api(
+            "/api/simulation"
+          );
+
+        setGameLoaded(
+          session.game_name,
+          state
+        );
+      }
+    } catch (error) {
+      startupStatus.textContent =
+        error.message;
+    }
+  }
+
+  initialize();
 }

@@ -1,8 +1,9 @@
 {
-  "schema_version": "0.1",
+  "schema_version": "0.2",
   "time": {
     "day": 1,
-    "hour": 8
+    "hour": 8,
+    "minute": 0
   },
   "household": {
     "money": 10000.0,
@@ -33,5 +34,16 @@
     "default_tile": "grass-tile"
   },
   "tile_states": [],
-  "facilities": []
+  "facilities": [],
+  "player": {
+    "name": "Homesteader",
+    "position": {
+      "column": 0.0,
+      "row": 41.0
+    },
+    "current_task": null,
+    "last_direction": "down"
+  },
+  "pending_events": [],
+  "last_full_tick_events": []
 }

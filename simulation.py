@@ -5,7 +5,9 @@ from pathlib import Path
 
 
 HOURS_PER_DAY = 24
+MINUTES_PER_HOUR = 60
 HOURS_PER_YEAR = 365 * HOURS_PER_DAY
+WALKING_SPEED_FT_PER_MINUTE = 264.0
 
 
 class Simulation:
@@ -89,7 +91,7 @@ class Simulation:
         easier to load while the project schema is still evolving.
         """
         self.game_state.setdefault("schema_version", "0.1")
-        self.game_state.setdefault("time", {"day": 1, "hour": 0})
+        self.game_state.setdefault("time", {"day": 1, "hour": 0, "minute": 0})
         self.game_state.setdefault("household", {})
         self.game_state.setdefault(
             "household_profile_id",
@@ -101,15 +103,26 @@ class Simulation:
         self.game_state.setdefault("map", {})
         self.game_state.setdefault("tile_states", [])
         self.game_state.setdefault("facilities", [])
+        self.game_state.setdefault("pending_events", [])
+        self.game_state.setdefault("last_full_tick_events", [])
 
         self.game_state["time"].setdefault("day", 1)
         self.game_state["time"].setdefault("hour", 0)
+        self.game_state["time"].setdefault("minute", 0)
 
         map_state = self.game_state["map"]
         map_state.setdefault("tile_size_ft", self.facility_config.get("tile_size_ft", 5))
         map_state.setdefault("width_tiles", 42)
         map_state.setdefault("height_tiles", 42)
         map_state.setdefault("default_tile", "grass-tile")
+
+        player = self.game_state.setdefault("player", {})
+        player.setdefault("name", "Homesteader")
+        position = player.setdefault("position", {})
+        position.setdefault("column", 0.0)
+        position.setdefault("row", float(max(0, int(map_state["height_tiles"]) - 1)))
+        player.setdefault("current_task", None)
+        player.setdefault("last_direction", "down")
 
         for instance in self.game_state["facilities"]:
             self._normalize_instance(instance)
@@ -224,6 +237,7 @@ class Simulation:
         """
         day = int(self.game_state["time"].get("day", 1))
         hour = int(self.game_state["time"].get("hour", 0))
+        minute = int(self.game_state["time"].get("minute", 0))
 
         # Temporary compatibility timestamp for the existing frontend.
         # Day 1 maps to the original prototype start date.
@@ -238,7 +252,7 @@ class Simulation:
 
         current_time = (
             start_time.replace(hour=0, minute=0, second=0, microsecond=0)
-            + timedelta(days=day - 1, hours=hour)
+            + timedelta(days=day - 1, hours=hour, minutes=minute)
         )
 
         # Compatibility resource structure expected by the original UI.
@@ -262,6 +276,7 @@ class Simulation:
             # Compatibility fields for the existing frontend
             "current_time": current_time.isoformat(),
             "tick_count": max(0, ((day - 1) * HOURS_PER_DAY) + hour),
+            "sub_tick_count": max(0, (((day - 1) * HOURS_PER_DAY + hour) * MINUTES_PER_HOUR) + minute),
             "labor_hours_per_tick": self.resource_config.get(
                 "labor_hours_per_tick",
                 0.0,
@@ -280,6 +295,9 @@ class Simulation:
             "inventories": deepcopy(self.game_state["inventories"]),
             "current_flows": deepcopy(self.game_state["current_flows"]),
             "map": deepcopy(self.game_state["map"]),
+            "player": deepcopy(self.game_state["player"]),
+            "pending_events": deepcopy(self.game_state["pending_events"]),
+            "last_full_tick_events": deepcopy(self.game_state["last_full_tick_events"]),
             "tile_states": deepcopy(self.game_state["tile_states"]),
             "facility_definitions": deepcopy(
                 list(self.facility_definitions.values())
@@ -388,6 +406,150 @@ class Simulation:
             number += 1
 
         return f"{prefix}-{number:03d}"
+
+    # ------------------------------------------------------------------
+    # Player movement and sub-ticks
+    # ------------------------------------------------------------------
+
+    def start_walk(self, column, row):
+        if not isinstance(column, (int, float)) or not isinstance(row, (int, float)):
+            raise ValueError("Walk destination must use numeric map coordinates.")
+
+        map_state = self.game_state["map"]
+        max_column = int(map_state["width_tiles"]) - 1
+        max_row = int(map_state["height_tiles"]) - 1
+        target_column = float(column)
+        target_row = float(row)
+
+        if not (0 <= target_column <= max_column and 0 <= target_row <= max_row):
+            raise ValueError("Walk destination is outside the map.")
+
+        player = self.game_state["player"]
+        position = player["position"]
+        dx = target_column - float(position.get("column", 0.0))
+        dy = target_row - float(position.get("row", 0.0))
+
+        if abs(dx) < 1e-9 and abs(dy) < 1e-9:
+            player["current_task"] = None
+            self.save()
+            return deepcopy(player)
+
+        direction = self._movement_direction(dx, dy)
+        player["current_task"] = {
+            "type": "walk",
+            "status": "active",
+            "target": {"column": target_column, "row": target_row},
+            "direction": direction,
+            "started_at": deepcopy(self.game_state["time"]),
+        }
+        player["last_direction"] = direction
+        self.save()
+        return deepcopy(player)
+
+    @staticmethod
+    def _movement_direction(dx, dy):
+        if abs(dx) >= abs(dy):
+            return "right" if dx >= 0 else "left"
+        return "down" if dy >= 0 else "up"
+
+    def _advance_player_one_minute(self):
+        player = self.game_state["player"]
+        task = player.get("current_task")
+        if not task or task.get("type") != "walk":
+            return {"status": "idle", "completed": False}
+
+        position = player["position"]
+        target = task.get("target") or {}
+        current_column = float(position.get("column", 0.0))
+        current_row = float(position.get("row", 0.0))
+        target_column = float(target.get("column", current_column))
+        target_row = float(target.get("row", current_row))
+
+        dx = target_column - current_column
+        dy = target_row - current_row
+        distance_tiles = (dx * dx + dy * dy) ** 0.5
+        tile_size_ft = float(self.game_state["map"].get("tile_size_ft", 5))
+        tiles_per_minute = (
+            WALKING_SPEED_FT_PER_MINUTE / tile_size_ft
+            if tile_size_ft > 0
+            else distance_tiles
+        )
+
+        direction = self._movement_direction(dx, dy) if distance_tiles > 0 else player.get("last_direction", "down")
+        task["direction"] = direction
+        player["last_direction"] = direction
+
+        if distance_tiles <= tiles_per_minute or distance_tiles <= 1e-9:
+            position["column"] = target_column
+            position["row"] = target_row
+            player["current_task"] = None
+            return {
+                "status": "completed",
+                "completed": True,
+                "type": "walk",
+                "target": deepcopy(target),
+                "direction": direction,
+            }
+
+        fraction = tiles_per_minute / distance_tiles
+        position["column"] = current_column + dx * fraction
+        position["row"] = current_row + dy * fraction
+        return {
+            "status": "walking",
+            "completed": False,
+            "type": "walk",
+            "target": deepcopy(target),
+            "direction": direction,
+        }
+
+    def _append_pending_event(self, event):
+        stamped = {
+            **deepcopy(event),
+            "time": deepcopy(self.game_state["time"]),
+        }
+        self.game_state["pending_events"].append(stamped)
+        return stamped
+
+    def advance_subtick(self):
+        """Advance one simulated minute.
+
+        Player/task state is updated every sub-tick. Facility and household
+        processing remains hourly and runs only when the minute counter wraps
+        from 59 to 00.
+        """
+        started_at = deepcopy(self.game_state["time"])
+        movement = self._advance_player_one_minute()
+
+        time_state = self.game_state["time"]
+        time_state["minute"] = int(time_state.get("minute", 0)) + 1
+        full_tick_due = time_state["minute"] >= MINUTES_PER_HOUR
+
+        if movement.get("completed"):
+            self._append_pending_event({
+                "type": "walk_completed",
+                "target": deepcopy(movement.get("target", {})),
+            })
+
+        full_tick_result = None
+        if full_tick_due:
+            time_state["minute"] = 0
+            self.game_state["last_full_tick_events"] = deepcopy(
+                self.game_state.get("pending_events", [])
+            )
+            self.game_state["pending_events"] = []
+            full_tick_result = self.advance_hour()
+        elif movement.get("completed"):
+            # Important player events are persisted immediately even though
+            # the expensive world simulation waits for the hour boundary.
+            self.save()
+
+        return {
+            "subtick_started_at": started_at,
+            "movement": movement,
+            "full_tick": full_tick_result is not None,
+            "full_tick_result": full_tick_result,
+            "state": self.state(),
+        }
 
     # ------------------------------------------------------------------
     # Tick processing
@@ -649,6 +811,7 @@ class Simulation:
 
     def _advance_clock(self):
         time_state = self.game_state["time"]
+        time_state["minute"] = 0
         time_state["hour"] += 1
 
         if time_state["hour"] >= HOURS_PER_DAY:

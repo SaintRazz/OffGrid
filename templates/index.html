@@ -12,51 +12,35 @@
       <div class="startup-dialog">
         <h1 id="startup-title">Homestead Simulation</h1>
         <p class="startup-intro">Start with an unimproved property or load an existing saved game.</p>
-
         <div id="startup-main-actions" class="startup-actions">
           <button id="new-game-button" class="startup-button primary" type="button">New Game</button>
           <button id="load-game-button" class="startup-button" type="button">Load Game</button>
         </div>
-
         <div id="load-game-panel" class="load-game-panel" hidden>
           <h2>Saved Games</h2>
           <div id="save-game-list" class="save-game-list"></div>
           <button id="back-to-start-button" class="startup-button secondary" type="button">Back</button>
         </div>
-
         <p id="startup-status" class="startup-status" aria-live="polite"></p>
       </div>
     </div>
 
-    <div
-      id="object-inspector-overlay"
-      class="object-inspector-overlay"
-      role="presentation"
-      hidden
-    >
-      <section
-        class="object-inspector-dialog"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="object-inspector-title"
-      >
+    <div id="object-inspector-overlay" class="object-inspector-overlay" role="presentation" hidden>
+      <section class="object-inspector-dialog" role="dialog" aria-modal="true" aria-labelledby="object-inspector-title">
         <header class="object-inspector-header">
           <div>
-            <h2 id="object-inspector-title">Map Object</h2>
+            <h2 id="object-inspector-title">Map Selection</h2>
             <p id="object-inspector-subtitle"></p>
           </div>
-          <button
-            id="object-inspector-close"
-            class="object-inspector-close"
-            type="button"
-            aria-label="Close object details"
-          >×</button>
+          <button id="object-inspector-close" class="object-inspector-close" type="button" aria-label="Close selection window">×</button>
         </header>
-
-        <div
-          id="object-inspector-content"
-          class="object-inspector-content"
-        ></div>
+        <div class="interaction-actions" aria-label="Selection actions">
+          <button id="walk-here-button" class="interaction-button primary" type="button">Walk Here</button>
+          <button class="interaction-button" type="button" disabled title="Not implemented in this push">Details</button>
+          <button class="interaction-button" type="button" disabled title="Not implemented in this push">Maintenance</button>
+          <button class="interaction-button" type="button" disabled title="Not implemented in this push">Manage Contents</button>
+        </div>
+        <div id="object-inspector-content" class="object-inspector-content"></div>
       </section>
     </div>
 
@@ -65,6 +49,11 @@
         <div class="game-identity">
           <span class="topbar-label">Current Game</span>
           <strong id="current-game-name">No game loaded</strong>
+        </div>
+        <div class="runtime-status" aria-label="Simulation runtime status">
+          <span class="runtime-dot" aria-hidden="true"></span>
+          <span id="runtime-label">Paused</span>
+          <span class="runtime-rate">1 sim min / real sec</span>
         </div>
         <div class="game-time" aria-label="Simulation date and time">
           <span id="simulation-date">Not started</span>
@@ -85,34 +74,26 @@
           <div class="tab-panels">
             <section id="household-panel" class="info-panel is-active">
               <h3>Household</h3>
-              <ul id="household-summary-list" aria-live="polite">
-                <li>No game loaded.</li>
-              </ul>
+              <ul id="household-summary-list" aria-live="polite"><li>No game loaded.</li></ul>
+              <h4>Homesteader</h4>
+              <ul id="player-status-list" aria-live="polite"><li>No game loaded.</li></ul>
             </section>
-
             <section id="consumption-panel" class="info-panel" hidden>
               <h3>Consumption</h3>
               <p class="panel-note">Annual-average daily household baseline.</p>
-              <ul id="consumption-list" aria-live="polite">
-                <li>No game loaded.</li>
-              </ul>
+              <ul id="consumption-list" aria-live="polite"><li>No game loaded.</li></ul>
               <h4>Electricity by end use</h4>
               <ul id="electricity-breakdown-list" aria-live="polite"></ul>
             </section>
-
             <section id="waste-water-panel" class="info-panel" hidden>
               <h3>Waste + Water</h3>
               <p class="panel-note">Annual-average daily household outputs and wastewater flows.</p>
-              <ul id="waste-water-list" aria-live="polite">
-                <li>No game loaded.</li>
-              </ul>
+              <ul id="waste-water-list" aria-live="polite"><li>No game loaded.</li></ul>
             </section>
-
             <section id="resources-panel" class="info-panel" hidden>
               <h3>Resources</h3>
               <ul id="resource-list" aria-live="polite"></ul>
             </section>
-
             <section id="operations-panel" class="info-panel" hidden>
               <h3>Operations</h3>
               <ul id="facility-status-list" aria-live="polite"><li>No game loaded.</li></ul>
@@ -124,20 +105,16 @@
           <div class="map-header">
             <span>Property Map</span>
             <span>42 × 42 tiles · 5 ft per tile</span>
-
             <div class="map-controls" aria-label="Map navigation controls">
               <button id="zoom-out" class="control-button map-control-button" type="button" aria-label="Zoom out">−</button>
               <span id="zoom-level" class="zoom-level" aria-live="polite">100%</span>
               <button id="zoom-in" class="control-button map-control-button" type="button" aria-label="Zoom in">+</button>
               <button id="zoom-reset" class="control-button map-reset-button" type="button">Reset View</button>
-              <button id="advance-tick" class="control-button" type="button" disabled>Advance 1 hour</button>
             </div>
           </div>
-
           <div id="map-viewport" class="map-viewport" aria-label="Property map viewport">
             <div id="land-grid" class="land-grid" role="grid" aria-label="Property map"></div>
           </div>
-
           <p id="placement-status" class="placement-status" aria-live="polite">Choose New Game or Load Game to begin.</p>
         </main>
 

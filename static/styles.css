@@ -857,3 +857,116 @@ body {
   }
 }
 
+
+/* ============================================================
+   Homesteader / automatic sub-tick push
+   ============================================================ */
+
+.runtime-status {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  color: var(--muted);
+  font-size: 0.76rem;
+  margin-left: auto;
+}
+
+.runtime-dot {
+  width: 0.62rem;
+  height: 0.62rem;
+  border-radius: 50%;
+  background: #858b86;
+  box-shadow: inset 0 0 0 1px rgba(0,0,0,0.25);
+}
+
+.runtime-status.is-running .runtime-dot {
+  background: #5f8f4d;
+}
+
+.runtime-rate {
+  opacity: 0.7;
+}
+
+.land-grid {
+  overflow: visible;
+}
+
+.player-avatar {
+  position: absolute;
+  width: 4.7%;
+  height: auto;
+  z-index: 12;
+  pointer-events: none;
+  user-select: none;
+  transform: translate(-50%, -88%);
+  transform-origin: center bottom;
+  image-rendering: pixelated;
+  filter: drop-shadow(1px 2px 1px rgba(20, 25, 19, 0.4));
+  transition: left 0.82s linear, top 0.82s linear;
+}
+
+.player-avatar.walk-left {
+  transform: translate(-50%, -88%) scaleX(-1);
+}
+
+.grid-cell.is-map-selected {
+  position: relative;
+}
+
+.interaction-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.5rem;
+  padding: 0.8rem 1rem;
+  border-bottom: 1px solid var(--panel-border);
+}
+
+.interaction-button {
+  min-height: 38px;
+  border: 1px solid var(--panel-border);
+  border-radius: 2px;
+  background: #f6f5ec;
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.interaction-button.primary {
+  background: #e3ead3;
+  outline: 2px solid #567344;
+  outline-offset: -2px;
+}
+
+.interaction-button:disabled {
+  opacity: 0.48;
+  cursor: not-allowed;
+}
+
+.selection-summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.3rem 1rem;
+  margin: 0;
+}
+
+.selection-summary dt {
+  color: var(--muted);
+}
+
+.selection-summary dd {
+  margin: 0;
+  font-weight: 600;
+  text-align: right;
+}
+
+@media (max-width: 640px) {
+  .interaction-actions {
+    grid-template-columns: 1fr;
+  }
+
+  .runtime-rate {
+    display: none;
+  }
+}
