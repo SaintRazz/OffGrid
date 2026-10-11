@@ -28,15 +28,15 @@
         }
       },
       "labor": {
-        "accrual_rate_per_day": null,
-        "attention_threshold_hours": null
+        "accrual_rate_per_day": 0,
+        "attention_threshold_hours": 0
       },
       "degradation_rate_per_year": 0,
       "container": null,
       "construction": {
         "materials": {},
-        "labor_hours": null,
-        "energy_kwh": null,
+        "labor_hours": 0,
+        "energy_kwh": 0,
         "prerequisites": []
       },
       "notes": [
@@ -51,7 +51,7 @@
       "image": "ChickenCoop.png",
       "width": 2,
       "height": 2,
-      "market_price": null,
+      "market_price": 2500,
       "inputs": {
         "feed": {
           "rate_per_container_unit_per_day": 0.25,
@@ -77,7 +77,7 @@
         "accrual_rate_per_container_unit_per_day": 0.01,
         "attention_threshold_hours": 0.5
       },
-      "degradation_rate_per_year": null,
+      "degradation_rate_per_year": 0.04,
       "container": {
         "type": "chicken",
         "capacity": 30,
@@ -101,7 +101,7 @@
       "image": "CompostPile.png",
       "width": 1,
       "height": 1,
-      "market_price": null,
+      "market_price": 0,
       "inputs": {
         "scat": {
           "mode": "shared_feedstock"
@@ -143,8 +143,8 @@
       },
       "construction": {
         "materials": {},
-        "labor_hours": null,
-        "energy_kwh": null,
+        "labor_hours": 2,
+        "energy_kwh": 0,
         "prerequisites": []
       },
       "notes": [
@@ -159,7 +159,7 @@
       "image": "BSFLReactor.png",
       "width": 1,
       "height": 1,
-      "market_price": null,
+      "market_price": 500,
       "inputs": {
         "kitchen_waste": {
           "mode": "feedstock"
@@ -176,7 +176,7 @@
         }
       },
       "labor": {
-        "accrual_rate_per_day": null,
+        "accrual_rate_per_day": 0.1,
         "attention_threshold_hours": null
       },
       "degradation_rate_per_year": 0,
@@ -184,21 +184,21 @@
         "type": "kitchen_waste_feedstock",
         "physical_volume_ft3": 40,
         "approx_physical_volume_gal": 300,
-        "usable_capacity_lb": null
+        "usable_capacity_lb": 60
       },
       "process": {
-        "feeding_rate_lb_feed_per_lb_larvae_per_day": null,
-        "larval_yield_fraction": null,
-        "residue_yield_fraction": null,
-        "average_maturation_time_days": null,
-        "maximum_larval_biomass_lb": null,
-        "maximum_processing_rate_lb_per_day": null,
+        "feeding_rate_lb_feed_per_lb_larvae_per_day": 1.3,
+        "maximum_growth_rate_per_day": 0.45,
+        "larval_yield_fraction": 0.35,
+        "residue_yield_fraction": 0.35,
+        "untracked_loss_fraction": 0.3,
+        "self_harvest_rate_per_day": 0.08,
+        "maximum_larval_biomass_lb": 20,
+        "maximum_processing_rate_lb_per_day": 26,
         "process_states": [
           "feedstock_mass",
-          "growing_larval_biomass",
-          "mature_larval_biomass",
-          "residue_mass",
-          "harvested_insect_forage"
+          "larval_biomass",
+          "residue_mass"
         ]
       },
       "construction": {
@@ -208,9 +208,14 @@
         "prerequisites": []
       },
       "notes": [
-        "Physical bin dimensions are approximately 4 ft x 4 ft x 2.5 ft.",
-        "Liquid drainage and self-harvest ramps are assumed.",
-        "Conversion is population-dependent and delayed; values not yet researched remain null."
+        "Physical bin dimensions are approximately 4 ft x 4 ft x 2.5 ft (about 40 ft3 gross volume).",
+        "Working surface is approximately 16 ft2; only a shallow active substrate layer is assumed so most gross volume remains available for ventilation, heat dissipation, drainage, and self-harvest geometry.",
+        "Usable feedstock capacity is 60 lb and maximum standing larval biomass is 20 lb.",
+        "At maximum larval biomass, nominal feed-processing capacity is 26 lb/day (20 lb larvae x 1.3 lb feed/lb larvae/day).",
+        "Of processed feed, nominal mass balance is 35% new larval biomass, 35% frass/organic residue, and 30% untracked metabolic, gaseous, and evaporative losses.",
+        "Larval growth is additionally capped at 0.45 of standing biomass per day; the 1.3 feed rate and 0.35 yield were intentionally chosen to closely match that ceiling.",
+        "Self-harvest is modeled as 0.08 of standing larval biomass per day, scaled by feeding activity; no feed means no modeled growth or maturation loss.",
+        "Routine reactor tending accrues 0.1 labor-hours/day; collection and transport of feedstocks are accounted for elsewhere."
       ]
     },
     {

@@ -147,6 +147,25 @@ class Simulation:
         instance.setdefault("accrued_labor_requirement", 0.0)
         instance.setdefault("last_operation", None)
 
+        # BSFL state migration: older saves tracked growing and mature larvae
+        # separately.  The current model treats the colony as one aggregate
+        # standing larval biomass and self-harvests a continuous fraction.
+        if facility_id == "bsfl-reactor":
+            if "larval_biomass" not in instance:
+                old_growing = float(instance.get("growing_larval_biomass", 0.0))
+                old_mature = float(instance.get("mature_larval_biomass", 0.0))
+                instance["larval_biomass"] = max(0.0, old_growing + old_mature)
+
+            instance.setdefault("feedstock_mass", 0.0)
+            instance.setdefault("residue_mass", 0.0)
+
+            # These are obsolete process states.  harvested_insect_forage was
+            # already exported to inventory by the old processor, so it is
+            # deliberately discarded rather than exported a second time.
+            instance.pop("growing_larval_biomass", None)
+            instance.pop("mature_larval_biomass", None)
+            instance.pop("harvested_insect_forage", None)
+
     # ------------------------------------------------------------------
     # Household profile helpers
     # ------------------------------------------------------------------
@@ -849,122 +868,188 @@ class Simulation:
         }
 
     def _process_bsfl_reactor(self, instance, definition):
-        """
-        The BSFL lifecycle is intentionally scaffolded but not invented.
+        """Process one hour of an aggregate black soldier fly larva colony.
 
-        The current facilities.json leaves feeding rate, yields, maturation
-        time, carrying capacity, and max throughput as null.  Until those
-        values are researched, the reactor retains its state without silently
-        manufacturing outputs.
+        facilities.json supplies the biological and physical constants.  The
+        GameState instance stores only the current feedstock, standing larval
+        biomass, and accumulated residue.
         """
         process = definition.get("process") or {}
+        container = definition.get("container") or {}
+
         required = (
             "feeding_rate_lb_feed_per_lb_larvae_per_day",
+            "maximum_growth_rate_per_day",
             "larval_yield_fraction",
             "residue_yield_fraction",
-            "average_maturation_time_days",
+            "untracked_loss_fraction",
+            "self_harvest_rate_per_day",
             "maximum_larval_biomass_lb",
-            "maximum_processing_rate_lb_per_day",
         )
 
         if any(process.get(key) is None for key in required):
             return {
                 "status": "idle",
-                "reason": "BSFL process constants not yet configured",
-                "feedstock_mass": round(
-                    float(instance.get("feedstock_mass", 0.0)), 6
-                ),
-                "growing_larval_biomass": round(
-                    float(instance.get("growing_larval_biomass", 0.0)), 6
-                ),
-                "mature_larval_biomass": round(
-                    float(instance.get("mature_larval_biomass", 0.0)), 6
-                ),
-                "residue_mass": round(
-                    float(instance.get("residue_mass", 0.0)), 6
-                ),
+                "reason": "BSFL process constants not fully configured",
+                "feedstock_mass": round(float(instance.get("feedstock_mass", 0.0)), 6),
+                "larval_biomass": round(float(instance.get("larval_biomass", 0.0)), 6),
+                "residue_mass": round(float(instance.get("residue_mass", 0.0)), 6),
+            }
+
+        if container.get("usable_capacity_lb") is None:
+            return {
+                "status": "idle",
+                "reason": "BSFL feedstock capacity not configured",
+                "feedstock_mass": round(float(instance.get("feedstock_mass", 0.0)), 6),
+                "larval_biomass": round(float(instance.get("larval_biomass", 0.0)), 6),
+                "residue_mass": round(float(instance.get("residue_mass", 0.0)), 6),
             }
 
         return self._run_bsfl_process(instance, definition)
 
     def _run_bsfl_process(self, instance, definition):
         process = definition["process"]
+        container = definition.get("container") or {}
 
         feedstock = max(0.0, float(instance.get("feedstock_mass", 0.0)))
-        growing = max(
+        larval_biomass = max(0.0, float(instance.get("larval_biomass", 0.0)))
+        residue_mass = max(0.0, float(instance.get("residue_mass", 0.0)))
+
+        feed_capacity = max(0.0, float(container.get("usable_capacity_lb", 0.0)))
+        feeding_rate = max(
             0.0,
-            float(instance.get("growing_larval_biomass", 0.0)),
+            float(process["feeding_rate_lb_feed_per_lb_larvae_per_day"]),
         )
-        mature = max(
+        maximum_growth_rate = max(
             0.0,
-            float(instance.get("mature_larval_biomass", 0.0)),
+            float(process["maximum_growth_rate_per_day"]),
         )
-
-        feeding_rate = float(
-            process["feeding_rate_lb_feed_per_lb_larvae_per_day"]
-        )
-        max_processing = float(
-            process["maximum_processing_rate_lb_per_day"]
-        )
-        larval_yield = float(process["larval_yield_fraction"])
-        residue_yield = float(process["residue_yield_fraction"])
-        maturation_days = float(process["average_maturation_time_days"])
-        max_biomass = float(process["maximum_larval_biomass_lb"])
-
-        potential_feed = growing * feeding_rate / HOURS_PER_DAY
-        processed = min(
-            feedstock,
-            potential_feed,
-            max_processing / HOURS_PER_DAY,
-        )
-
-        new_larval_biomass = processed * larval_yield
-        new_residue = processed * residue_yield
-
-        available_growth_room = max(
+        larval_yield = max(0.0, float(process["larval_yield_fraction"]))
+        residue_yield = max(0.0, float(process["residue_yield_fraction"]))
+        nominal_loss_fraction = max(
             0.0,
-            max_biomass - growing - mature,
+            float(process["untracked_loss_fraction"]),
         )
-        retained_growth = min(new_larval_biomass, available_growth_room)
+        self_harvest_rate = max(
+            0.0,
+            float(process["self_harvest_rate_per_day"]),
+        )
+        max_biomass = max(
+            0.0,
+            float(process["maximum_larval_biomass_lb"]),
+        )
 
-        # Excess potential larval growth is not created if the reactor has
-        # reached its configured carrying capacity.
-        growing += retained_growth
-        feedstock -= processed
+        configured_max_processing = process.get("maximum_processing_rate_lb_per_day")
+        if configured_max_processing is None:
+            maximum_processing_per_hour = max_biomass * feeding_rate / HOURS_PER_DAY
+        else:
+            maximum_processing_per_hour = max(
+                0.0,
+                float(configured_max_processing) / HOURS_PER_DAY,
+            )
 
-        maturing = (
-            growing / (maturation_days * HOURS_PER_DAY)
-            if maturation_days > 0
+        # Existing saves are allowed to be above the nominal feed capacity;
+        # capacity constrains loading, while the processor simply works the
+        # excess down instead of deleting stored material.
+        potential_feed = larval_biomass * feeding_rate / HOURS_PER_DAY
+        processed = min(feedstock, potential_feed, maximum_processing_per_hour)
+
+        feeding_fraction = (
+            processed / potential_feed
+            if potential_feed > 0
             else 0.0
         )
-        maturing = min(maturing, growing)
+        feeding_fraction = max(0.0, min(1.0, feeding_fraction))
 
-        growing -= maturing
-        mature += maturing
-
-        # The reactor design assumes mature/prepupal larvae self-harvest.
-        harvested = mature
-        mature = 0.0
-
-        instance["feedstock_mass"] = feedstock
-        instance["growing_larval_biomass"] = growing
-        instance["mature_larval_biomass"] = mature
-        instance["residue_mass"] = (
-            float(instance.get("residue_mass", 0.0)) + new_residue
+        # Feed-derived growth is limited both by conversion yield and by the
+        # colony's researched maximum relative growth rate.
+        yield_limited_growth = processed * larval_yield
+        biology_limited_growth = (
+            larval_biomass
+            * maximum_growth_rate
+            / HOURS_PER_DAY
+            * feeding_fraction
         )
-        instance["harvested_insect_forage"] = (
-            float(instance.get("harvested_insect_forage", 0.0)) + harvested
-        )
+        gross_growth = min(yield_limited_growth, biology_limited_growth)
 
+        new_residue = processed * residue_yield
+
+        # The nominal 35/35/30 split is exact when the growth ceiling does not
+        # bind.  If the independently rounded 0.45/day growth ceiling binds,
+        # the tiny difference is treated as additional untracked loss so mass
+        # is still conserved.
+        untracked_loss = max(0.0, processed - gross_growth - new_residue)
+        nominal_untracked_loss = processed * nominal_loss_fraction
+
+        # Continuous self-harvest represents an established mixed-age colony.
+        # It is activity-scaled so an unfed/torpid colony neither grows nor
+        # drains away through modeled maturation.
+        self_harvest = (
+            larval_biomass
+            * self_harvest_rate
+            / HOURS_PER_DAY
+            * feeding_fraction
+        )
+        self_harvest = min(self_harvest, larval_biomass + gross_growth)
+
+        larval_biomass = larval_biomass + gross_growth - self_harvest
+
+        # Carrying-capacity overflow becomes additional harvest rather than
+        # disappearing from the mass balance.
+        overflow_harvest = 0.0
+        if max_biomass > 0 and larval_biomass > max_biomass:
+            overflow_harvest = larval_biomass - max_biomass
+            larval_biomass = max_biomass
+
+        harvested = self_harvest + overflow_harvest
+        feedstock -= processed
+        residue_mass += new_residue
+
+        instance["feedstock_mass"] = max(0.0, feedstock)
+        instance["larval_biomass"] = max(0.0, larval_biomass)
+        instance["residue_mass"] = max(0.0, residue_mass)
+
+        # Self-harvested larvae leave the reactor immediately as the ordinary
+        # insect_forage resource.  Residue remains inside until a later
+        # collection/emptying action is implemented.
         self._add_inventory("insect_forage", harvested)
 
-        return {
-            "status": "operating" if processed > 0 else "idle",
+        if larval_biomass <= 0:
+            status = "idle"
+            reason = "no larval biomass"
+        elif feedstock <= 0 and processed <= 0:
+            status = "idle"
+            reason = "no feedstock"
+        elif processed > 0:
+            status = "operating"
+            reason = None
+        else:
+            status = "idle"
+            reason = "unable to process feedstock"
+
+        result = {
+            "status": status,
+            "feedstock_capacity_lb": round(feed_capacity, 6),
+            "feedstock_mass": round(instance["feedstock_mass"], 6),
+            "larval_biomass": round(instance["larval_biomass"], 6),
+            "maximum_larval_biomass_lb": round(max_biomass, 6),
+            "residue_mass": round(instance["residue_mass"], 6),
+            "feeding_fraction": round(feeding_fraction, 6),
             "processed_feedstock": round(processed, 6),
-            "new_larval_biomass": round(retained_growth, 6),
+            "gross_larval_growth": round(gross_growth, 6),
             "new_residue": round(new_residue, 6),
+            "untracked_loss": round(untracked_loss, 6),
+            "nominal_untracked_loss": round(nominal_untracked_loss, 6),
+            "self_harvested_insect_forage": round(self_harvest, 6),
+            "capacity_overflow_harvest": round(overflow_harvest, 6),
             "harvested_insect_forage": round(harvested, 6),
+            "accrued_labor_requirement": round(
+                instance["accrued_labor_requirement"], 6
+            ),
         }
+        if reason is not None:
+            result["reason"] = reason
+        return result
 
     def _process_generic_passive_facility(self, instance, definition):
         produced = {}
