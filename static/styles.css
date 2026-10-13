@@ -1072,3 +1072,110 @@ body {
   grid-template-columns: 1fr 1fr;
   gap: 0.45rem;
 }
+
+/* ------------------------------------------------------------
+   House edge and household waste pickup points
+   ------------------------------------------------------------ */
+
+.house-eaves {
+  position: relative;
+  z-index: 8;
+  align-self: end;
+  height: 76%;
+  margin: 0 -2%;
+  transform: translateY(52%);
+  pointer-events: auto;
+  cursor: pointer;
+  background:
+    linear-gradient(to bottom, rgba(255,255,255,0.16), transparent 18%),
+    repeating-linear-gradient(
+      90deg,
+      #77513f 0,
+      #77513f 12px,
+      #684536 12px,
+      #684536 14px
+    );
+  border-top: 3px solid #3f2b25;
+  border-left: 2px solid #4b332b;
+  border-right: 2px solid #4b332b;
+  box-shadow: 0 -3px 0 #bca88c, 0 -5px 0 #57483b, 0 -6px 5px rgba(20,25,19,0.25);
+}
+
+.house-eaves::after {
+  content: "HOUSE";
+  position: absolute;
+  left: 50%;
+  top: -1.25rem;
+  transform: translateX(-50%);
+  padding: 0.12rem 0.3rem;
+  border: 1px solid rgba(54,47,38,0.55);
+  background: rgba(249,245,222,0.9);
+  color: #3e392f;
+  font-size: clamp(0.4rem, 0.65vw, 0.62rem);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.house-pickup {
+  position: relative;
+  z-index: 13;
+  align-self: end;
+  justify-self: stretch;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  grid-template-rows: auto auto;
+  gap: 0.08rem 0.22rem;
+  min-width: 0;
+  min-height: 0;
+  margin: 10%;
+  padding: 0.18rem 0.22rem;
+  border: 2px solid #4f493d;
+  border-radius: 2px;
+  background: #f3edcf;
+  color: #332f29;
+  font: inherit;
+  font-size: clamp(0.36rem, 0.58vw, 0.58rem);
+  line-height: 1.05;
+  text-align: left;
+  cursor: pointer;
+  box-shadow: 1px 1px 0 rgba(30,28,24,0.32);
+}
+
+.house-pickup .pickup-icon {
+  grid-row: 1 / span 2;
+  align-self: center;
+  font-size: 1.15em;
+}
+
+.house-pickup strong {
+  font-size: 0.95em;
+}
+
+.house-pickup:hover,
+.house-pickup:focus-visible {
+  outline: 2px solid #567344;
+  outline-offset: 1px;
+}
+
+.kitchen-pickup {
+  background: #eadbb6;
+}
+
+.paper-pickup {
+  background: #e7e1d4;
+}
+
+.contents-row.is-focused {
+  outline: 2px solid #567344;
+  outline-offset: 2px;
+  padding-left: 0.5rem;
+  padding-right: 0.5rem;
+}
+
+.house-trash-note {
+  margin-top: 0.8rem;
+  padding-top: 0.7rem;
+  border-top: 1px solid rgba(42, 47, 42, 0.25);
+}

@@ -35,7 +35,8 @@
     "kitchen_waste": {
       "name": "Kitchen waste",
       "unit": "lb",
-      "initial_stock": 0.0
+      "initial_stock": 0,
+      "capacity": null
     },
     "plant_litter": {
       "name": "Plant litter",
@@ -71,6 +72,18 @@
       "name": "BSFL larval biomass",
       "unit": "lb",
       "initial_stock": 0.0
+    },
+    "paper_waste": {
+      "name": "Paper waste",
+      "unit": "lb",
+      "initial_stock": 0,
+      "capacity": null
+    },
+    "recalcitrant_waste": {
+      "name": "Recalcitrant waste",
+      "unit": "lb",
+      "initial_stock": 0,
+      "capacity": null
     }
   }
 }

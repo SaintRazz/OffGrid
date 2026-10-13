@@ -116,6 +116,28 @@ class Simulation:
         map_state.setdefault("height_tiles", 42)
         map_state.setdefault("default_tile", "grass-tile")
 
+        # The house interior remains abstract.  Only the lower eaves and two
+        # household-waste pickup points are represented on the yard map.
+        house = self.game_state.setdefault("house", {})
+        house.setdefault("id", "main-house")
+        house.setdefault("name", "House")
+        eaves = house.setdefault("eaves", {})
+        eaves.setdefault("column", 11)
+        eaves.setdefault("width", 20)
+        pickup_points = house.setdefault("pickup_points", {})
+        kitchen_pickup = pickup_points.setdefault("kitchen_waste", {})
+        kitchen_pickup.setdefault("column", 13.0)
+        kitchen_pickup.setdefault("row", 40.0)
+        paper_pickup = pickup_points.setdefault("paper_waste", {})
+        paper_pickup.setdefault("column", 16.0)
+        paper_pickup.setdefault("row", 40.0)
+        entrance = house.setdefault("entrance", {})
+        entrance.setdefault("column", 14.5)
+        entrance.setdefault("row", 40.0)
+        outputs = house.setdefault("outputs", {})
+        outputs.setdefault("kitchen_waste", 0.0)
+        outputs.setdefault("paper_waste", 0.0)
+
         player = self.game_state.setdefault("player", {})
         player.setdefault("name", "Homesteader")
         position = player.setdefault("position", {})
@@ -296,6 +318,7 @@ class Simulation:
             "inventories": deepcopy(self.game_state["inventories"]),
             "current_flows": deepcopy(self.game_state["current_flows"]),
             "map": deepcopy(self.game_state["map"]),
+            "house": deepcopy(self.game_state["house"]),
             "player": deepcopy(self.game_state["player"]),
             "pending_events": deepcopy(self.game_state["pending_events"]),
             "last_full_tick_events": deepcopy(self.game_state["last_full_tick_events"]),
@@ -631,6 +654,38 @@ class Simulation:
         self.save()
         return deepcopy(event)
 
+    def pickup_house_output(self, resource_id, amount):
+        """Move a recoverable household waste stream into player inventory."""
+        if resource_id not in {"kitchen_waste", "paper_waste"}:
+            raise ValueError("That resource is not available from a house pickup point.")
+
+        try:
+            amount = float(amount)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Pickup amount must be numeric.") from exc
+
+        if amount <= 0:
+            raise ValueError("Pickup amount must be greater than zero.")
+
+        outputs = self.game_state.setdefault("house", {}).setdefault("outputs", {})
+        available = float(outputs.get(resource_id, 0.0))
+        if amount > available + 1e-9:
+            raise ValueError(
+                f"Not enough {resource_id.replace('_', ' ')} at the house pickup point. "
+                f"Available: {available:g}."
+            )
+
+        outputs[resource_id] = max(0.0, available - amount)
+        self._add_player_inventory(resource_id, amount)
+        event = self._append_pending_event({
+            "type": "house_pickup",
+            "resource_id": resource_id,
+            "amount": amount,
+            "effective": "immediate",
+        })
+        self.save()
+        return deepcopy(event)
+
     # ------------------------------------------------------------------
     # Player movement and sub-ticks
     # ------------------------------------------------------------------
@@ -922,6 +977,9 @@ class Simulation:
         flows.setdefault("blackwater_generated_this_tick_gal", 0.0)
         flows.setdefault("other_water_use_this_tick_gal", 0.0)
         flows.setdefault("kitchen_waste_generated_this_tick_lb", 0.0)
+        flows.setdefault("paper_waste_generated_this_tick_lb", 0.0)
+        flows.setdefault("recalcitrant_waste_generated_this_tick_lb", 0.0)
+        flows.setdefault("garbage_to_curb_this_tick_lb", 0.0)
         flows.setdefault("recyclable_paper_generated_this_tick_lb", 0.0)
         flows.setdefault("recyclable_plastic_generated_this_tick_lb", 0.0)
         flows.setdefault("recyclable_glass_generated_this_tick_lb", 0.0)
@@ -971,16 +1029,36 @@ class Simulation:
         for profile_key, flow_key in waste_key_map.items():
             flows[flow_key] = household_flows.get(profile_key, 0.0)
 
-        # Kitchen waste is a recoverable household material rather than only
-        # a reporting flow. At the agreed baseline of 2 lb/day for the
-        # four-person household, this adds 1/12 lb per full hourly tick.
-        # It accumulates in household stores until the Homesteader carries it
-        # to a compost pile, BSFL reactor, or another future destination.
+        # Recoverable household waste appears physically at the house pickup
+        # points. Separation/collection is abstracted; the Homesteader must
+        # carry it from the house to a processor. Recalcitrant waste has no
+        # productive use and is abstracted as curbside garbage.
         kitchen_waste = max(
             0.0,
             float(household_flows.get("kitchen_waste_lb", 0.0)),
         )
-        self._add_inventory("kitchen_waste", kitchen_waste)
+        paper_waste = max(
+            0.0,
+            float(household_flows.get("recyclable_paper_lb", 0.0)),
+        )
+        recalcitrant_waste = max(
+            0.0,
+            float(household_flows.get("recyclable_plastic_lb", 0.0))
+            + float(household_flows.get("recyclable_glass_lb", 0.0))
+            + float(household_flows.get("recyclable_metal_lb", 0.0))
+            + float(household_flows.get("residual_nonfood_waste_lb", 0.0)),
+        )
+
+        house_outputs = self.game_state["house"].setdefault("outputs", {})
+        house_outputs["kitchen_waste"] = (
+            float(house_outputs.get("kitchen_waste", 0.0)) + kitchen_waste
+        )
+        house_outputs["paper_waste"] = (
+            float(house_outputs.get("paper_waste", 0.0)) + paper_waste
+        )
+        flows["paper_waste_generated_this_tick_lb"] = paper_waste
+        flows["recalcitrant_waste_generated_this_tick_lb"] = recalcitrant_waste
+        flows["garbage_to_curb_this_tick_lb"] = recalcitrant_waste
 
         total_electricity = electricity.get("total", 0.0)
         flows["electricity_consumed_this_tick_kwh"] = total_electricity
@@ -1003,24 +1081,9 @@ class Simulation:
             "produced": {
                 "greywater_gal": round(greywater, 6),
                 "blackwater_gal": round(blackwater, 6),
-                "kitchen_waste_lb": round(
-                    household_flows.get("kitchen_waste_lb", 0.0), 6
-                ),
-                "recyclable_paper_lb": round(
-                    household_flows.get("recyclable_paper_lb", 0.0), 6
-                ),
-                "recyclable_plastic_lb": round(
-                    household_flows.get("recyclable_plastic_lb", 0.0), 6
-                ),
-                "recyclable_glass_lb": round(
-                    household_flows.get("recyclable_glass_lb", 0.0), 6
-                ),
-                "recyclable_metal_lb": round(
-                    household_flows.get("recyclable_metal_lb", 0.0), 6
-                ),
-                "residual_nonfood_waste_lb": round(
-                    household_flows.get("residual_nonfood_waste_lb", 0.0), 6
-                ),
+                "kitchen_waste_lb": round(kitchen_waste, 6),
+                "paper_waste_lb": round(paper_waste, 6),
+                "recalcitrant_waste_lb": round(recalcitrant_waste, 6),
             },
             "electricity_end_use_kwh": end_use_electricity,
             "note": (

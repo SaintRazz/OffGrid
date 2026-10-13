@@ -210,6 +210,27 @@ def transfer_player_inventory():
     })
 
 
+@app.post("/api/house/pickup")
+def pickup_house_output():
+    payload = request.get_json(silent=True) or {}
+
+    try:
+        with SIMULATION_LOCK:
+            event = get_simulation().pickup_house_output(
+                resource_id=payload.get("resource_id"),
+                amount=payload.get("amount"),
+            )
+            state = get_simulation().state()
+    except (RuntimeError, OSError, TypeError, ValueError, KeyError) as exc:
+        return jsonify({"error": str(exc)}), 400
+
+    return jsonify({
+        "status": "picked_up",
+        "event": event,
+        "state": state,
+    })
+
+
 @app.post("/api/player/walk")
 def walk_player():
     payload = request.get_json(silent=True) or {}

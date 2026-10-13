@@ -50,7 +50,6 @@ if (landGrid) {
   const infoPanels = document.querySelectorAll(".info-panel");
 
   const definitionsById = new Map();
-
   let placements = [];
   let simulationState = null;
   let selectedBuildId = null;
@@ -61,7 +60,6 @@ if (landGrid) {
   let mapZoom = 1;
   let mapPanX = 0;
   let mapPanY = 0;
-
   let mapPointerDown = false;
   let mapPointerId = null;
   let mapDragStarted = false;
@@ -74,11 +72,8 @@ if (landGrid) {
   let runtimeTimer = null;
   let subTickInFlight = false;
   let gameLoaded = false;
-
   let inspectorPausedRuntime = false;
   let inspectorMode = "summary";
-
-  // Strong interaction pause state.
   let interactionOpen = false;
   let deferredSubTickState = null;
   let deferredSubTickMovement = null;
@@ -90,27 +85,19 @@ if (landGrid) {
   for (let row = 0; row < GRID_SIZE; row += 1) {
     for (let column = 0; column < GRID_SIZE; column += 1) {
       const cell = document.createElement("div");
-
       cell.className = "grid-cell";
       cell.dataset.row = String(row);
       cell.dataset.column = String(column);
-
       cell.style.gridRow = String(row + 1);
       cell.style.gridColumn = String(column + 1);
-
       cell.setAttribute("role", "gridcell");
       cell.setAttribute(
         "aria-label",
         `Grass tile, row ${row + 1}, column ${column + 1}`
       );
-
       landGrid.appendChild(cell);
     }
   }
-
-  // ============================================================
-  // General helpers
-  // ============================================================
 
   function formatAmount(value, maximumFractionDigits = 4) {
     return new Intl.NumberFormat(undefined, {
@@ -172,10 +159,7 @@ if (landGrid) {
   // ============================================================
 
   function setRuntimeRunning(running, label = null) {
-    runtimeStatus?.classList.toggle(
-      "is-running",
-      running
-    );
+    runtimeStatus?.classList.toggle("is-running", running);
 
     if (runtimeLabel) {
       runtimeLabel.textContent =
@@ -190,7 +174,11 @@ if (landGrid) {
     }
 
     if (interactionOpen) {
-      setRuntimeRunning(false, "Paused for interaction");
+      setRuntimeRunning(
+        false,
+        "Paused for interaction"
+      );
+
       return;
     }
 
@@ -231,12 +219,6 @@ if (landGrid) {
         }
       );
 
-      /*
-       * The request may have started just before the user opened an
-       * interaction window. In that case we retain the authoritative
-       * state returned by the backend, but we do not redraw the
-       * interaction UI.
-       */
       if (interactionOpen) {
         deferredSubTickState =
           result.state;
@@ -368,8 +350,7 @@ if (landGrid) {
       clamped.y;
 
     landGrid.style.transform =
-      `translate(${mapPanX}px, ${mapPanY}px) ` +
-      `scale(${mapZoom})`;
+      `translate(${mapPanX}px, ${mapPanY}px) scale(${mapZoom})`;
 
     zoomLevel.textContent =
       `${Math.round(
@@ -1089,7 +1070,7 @@ if (landGrid) {
   }
 
   // ============================================================
-  // Manage Contents
+  // Manage contents
   // ============================================================
 
   function managedContentOptions(
@@ -1260,9 +1241,296 @@ if (landGrid) {
       );
   }
 
+  function renderHouseContentsManager(
+    selection,
+    focusResourceId = null
+  ) {
+    inspectorContent.replaceChildren();
+
+    const house =
+      simulationState?.house;
+
+    if (!house) {
+      return;
+    }
+
+    const intro =
+      document.createElement(
+        "p"
+      );
+
+    intro.className =
+      "contents-message";
+
+    intro.textContent =
+      "Kitchen and paper waste are separated abstractly inside the household and appear at these pickup points. Picked-up material moves into the Homesteader's carried inventory.";
+
+    inspectorContent.appendChild(
+      intro
+    );
+
+    const streams = [
+      {
+        resourceId:
+          "kitchen_waste",
+        label:
+          "Kitchen waste",
+        unit:
+          "lb",
+      },
+      {
+        resourceId:
+          "paper_waste",
+        label:
+          "Paper waste",
+        unit:
+          "lb",
+      },
+    ];
+
+    for (
+      const stream
+      of streams
+    ) {
+      const available =
+        Number(
+          house.outputs
+            ?.[stream.resourceId] ??
+          0
+        );
+
+      const carried =
+        Number(
+          simulationState
+            ?.player
+            ?.inventory
+            ?.[stream.resourceId] ??
+          0
+        );
+
+      const card =
+        document.createElement(
+          "section"
+        );
+
+      card.className =
+        "contents-row";
+
+      if (
+        focusResourceId ===
+        stream.resourceId
+      ) {
+        card.classList.add(
+          "is-focused"
+        );
+      }
+
+      const heading =
+        document.createElement(
+          "h3"
+        );
+
+      heading.textContent =
+        stream.label;
+
+      card.appendChild(
+        heading
+      );
+
+      const stats =
+        document.createElement(
+          "p"
+        );
+
+      stats.className =
+        "contents-stats";
+
+      stats.textContent =
+        `At pickup point: ${formatAmount(available)} ${stream.unit} · ` +
+        `Carried by Homesteader: ${formatAmount(carried)} ${stream.unit}`;
+
+      card.appendChild(
+        stats
+      );
+
+      const form =
+        document.createElement(
+          "form"
+        );
+
+      form.className =
+        "contents-form";
+
+      const label =
+        document.createElement(
+          "label"
+        );
+
+      label.textContent =
+        `Amount to pick up (${stream.unit})`;
+
+      const input =
+        document.createElement(
+          "input"
+        );
+
+      input.type =
+        "number";
+
+      input.min =
+        "0";
+
+      input.step =
+        "0.1";
+
+      input.max =
+        String(
+          available
+        );
+
+      input.value =
+        available > 0
+          ? String(
+              Math.min(
+                available,
+                0.1
+              )
+            )
+          : "0";
+
+      input.disabled =
+        available <= 0;
+
+      label.appendChild(
+        input
+      );
+
+      const button =
+        document.createElement(
+          "button"
+        );
+
+      button.type =
+        "submit";
+
+      button.className =
+        "interaction-button primary";
+
+      button.textContent =
+        "Pick up";
+
+      button.disabled =
+        available <= 0;
+
+      form.append(
+        label,
+        button
+      );
+
+      form.addEventListener(
+        "submit",
+        async (event) => {
+          event.preventDefault();
+
+          const amount =
+            Number(
+              input.value
+            );
+
+          if (
+            !Number.isFinite(
+              amount
+            ) ||
+            amount <= 0
+          ) {
+            statusLine.textContent =
+              "Enter an amount greater than zero.";
+
+            return;
+          }
+
+          try {
+            const result =
+              await api(
+                "/api/house/pickup",
+                {
+                  method:
+                    "POST",
+
+                  body:
+                    JSON.stringify(
+                      {
+                        resource_id:
+                          stream.resourceId,
+
+                        amount,
+                      }
+                    ),
+                }
+              );
+
+            renderState(
+              result.state
+            );
+
+            inspectorMode =
+              "contents";
+
+            renderHouseContentsManager(
+              selectedMapObject,
+              stream.resourceId
+            );
+
+            statusLine.textContent =
+              `${formatAmount(amount)} ${stream.unit} ${stream.label.toLowerCase()} picked up.`;
+          } catch (error) {
+            statusLine.textContent =
+              error.message;
+          }
+        }
+      );
+
+      card.appendChild(
+        form
+      );
+
+      inspectorContent.appendChild(
+        card
+      );
+    }
+
+    const trash =
+      document.createElement(
+        "p"
+      );
+
+    trash.className =
+      "contents-message house-trash-note";
+
+    trash.textContent =
+      "Recalcitrant household waste is abstracted as curbside garbage and has no pickup inventory in this version.";
+
+    inspectorContent.appendChild(
+      trash
+    );
+  }
+
   function renderContentsManager(
     selection
   ) {
+    if (
+      selection?.kind ===
+      "house"
+    ) {
+      renderHouseContentsManager(
+        selection,
+        selection.focusResourceId ??
+          null
+      );
+
+      return;
+    }
+
     inspectorContent.replaceChildren();
 
     const options =
@@ -1301,9 +1569,7 @@ if (landGrid) {
       "contents-message";
 
     intro.textContent =
-      "Material must be carried by the Homesteader. " +
-      "Transfers into a facility become active at the next hourly full tick, " +
-      "so material added mid-hour is not processed retroactively.";
+      "Transfers reserve inventory immediately. Additions become active at the next hourly full tick, so material added mid-hour is not processed retroactively.";
 
     inspectorContent.appendChild(
       intro
@@ -1519,14 +1785,6 @@ if (landGrid) {
                 }
               );
 
-            /*
-             * Direct management actions should update the underlying
-             * authoritative state immediately. This is not an automatic
-             * sub-tick, so it is safe to redraw the current contents view.
-             */
-            simulationState =
-              result.state;
-
             renderState(
               result.state
             );
@@ -1549,17 +1807,13 @@ if (landGrid) {
                     ?.facility_id
                 );
 
-              inspectorMode =
-                "contents";
-
               renderContentsManager(
                 selectedMapObject
               );
             }
 
             statusLine.textContent =
-              `${formatAmount(amount)} ${option.unit} ` +
-              `${option.label.toLowerCase()} staged for the next full tick.`;
+              `${formatAmount(amount)} ${option.unit} ${option.label.toLowerCase()} staged for the next full tick.`;
           } catch (error) {
             statusLine.textContent =
               error.message;
@@ -1578,7 +1832,7 @@ if (landGrid) {
   }
 
   // ============================================================
-  // Selection summary
+  // Selection summaries
   // ============================================================
 
   function renderSelectionSummary(
@@ -1593,6 +1847,71 @@ if (landGrid) {
 
     dl.className =
       "selection-summary";
+
+    if (
+      selection?.kind ===
+      "house"
+    ) {
+      const house =
+        simulationState
+          ?.house ??
+        {};
+
+      const rows = [
+        [
+          "Type",
+          "House edge / pickup area",
+        ],
+        [
+          "Kitchen waste ready",
+          `${formatAmount(
+            house.outputs
+              ?.kitchen_waste ??
+            0
+          )} lb`,
+        ],
+        [
+          "Paper waste ready",
+          `${formatAmount(
+            house.outputs
+              ?.paper_waste ??
+            0
+          )} lb`,
+        ],
+      ];
+
+      for (
+        const [label, value]
+        of rows
+      ) {
+        const dt =
+          document.createElement(
+            "dt"
+          );
+
+        const dd =
+          document.createElement(
+            "dd"
+          );
+
+        dt.textContent =
+          label;
+
+        dd.textContent =
+          value;
+
+        dl.append(
+          dt,
+          dd
+        );
+      }
+
+      inspectorContent.appendChild(
+        dl
+      );
+
+      return;
+    }
 
     const rows = [
       [
@@ -1716,10 +2035,7 @@ if (landGrid) {
     );
   }
 
-  function openSelection(
-    column,
-    row
-  ) {
+  function beginInteractionPause() {
     interactionOpen =
       true;
 
@@ -1734,6 +2050,13 @@ if (landGrid) {
       inspectorPausedRuntime =
         false;
     }
+  }
+
+  function openSelection(
+    column,
+    row
+  ) {
+    beginInteractionPause();
 
     inspectorMode =
       "summary";
@@ -1756,6 +2079,8 @@ if (landGrid) {
           );
 
     selectedMapObject = {
+      kind:
+        "map",
       column,
       row,
       instance,
@@ -1799,6 +2124,79 @@ if (landGrid) {
     walkHereButton.focus();
   }
 
+  function openHouseSelection(
+    focusResourceId = null
+  ) {
+    const house =
+      simulationState?.house;
+
+    if (!house) {
+      return;
+    }
+
+    beginInteractionPause();
+
+    const entrance =
+      house.entrance ??
+      {
+        column: 14.5,
+        row: 40.0,
+      };
+
+    selectedMapObject = {
+      kind:
+        "house",
+      column:
+        Number(
+          entrance.column
+        ),
+      row:
+        Number(
+          entrance.row
+        ),
+      house,
+      focusResourceId,
+    };
+
+    clearMapSelection();
+
+    inspectorTitle.textContent =
+      "House";
+
+    inspectorSubtitle.textContent =
+      "Household waste pickup";
+
+    inspectorMode =
+      focusResourceId
+        ? "contents"
+        : "summary";
+
+    if (
+      inspectorMode ===
+      "contents"
+    ) {
+      renderHouseContentsManager(
+        selectedMapObject,
+        focusResourceId
+      );
+    } else {
+      renderSelectionSummary(
+        selectedMapObject
+      );
+    }
+
+    manageContentsButton.disabled =
+      false;
+
+    manageContentsButton.title =
+      "Manage household waste pickup";
+
+    inspectorOverlay.hidden =
+      false;
+
+    walkHereButton.focus();
+  }
+
   function closeInspector(
     {
       resume = true,
@@ -1824,10 +2222,6 @@ if (landGrid) {
     interactionOpen =
       false;
 
-    /*
-     * If a sub-tick response arrived after the interaction window opened,
-     * apply that state now that the interaction UI is closed.
-     */
     if (deferredSubTickState) {
       const state =
         deferredSubTickState;
@@ -1900,17 +2294,10 @@ if (landGrid) {
             }
           );
 
-        simulationState =
-          result.state;
-
         renderState(
           result.state
         );
 
-        /*
-         * Walking should close the interaction window and allow
-         * automatic time to resume.
-         */
         closeInspector();
         clearMapSelection();
 
@@ -2460,9 +2847,6 @@ if (landGrid) {
           }
         );
 
-      simulationState =
-        result.state;
-
       renderState(
         result.state
       );
@@ -2505,6 +2889,144 @@ if (landGrid) {
   // ============================================================
   // State rendering
   // ============================================================
+
+  function renderHouse() {
+    landGrid
+      .querySelectorAll(
+        ".house-eaves, .house-pickup"
+      )
+      .forEach(
+        (element) => {
+          element.remove();
+        }
+      );
+
+    const house =
+      simulationState?.house;
+
+    if (!house) {
+      return;
+    }
+
+    const eaves =
+      house.eaves ??
+      {
+        column: 11,
+        width: 20,
+      };
+
+    const eavesElement =
+      document.createElement(
+        "div"
+      );
+
+    eavesElement.className =
+      "house-eaves";
+
+    eavesElement.dataset.houseId =
+      house.id ??
+      "main-house";
+
+    eavesElement.style.gridColumn =
+      `${Number(eaves.column) + 1} / span ${Number(eaves.width)}`;
+
+    eavesElement.style.gridRow =
+      `${GRID_SIZE} / span 1`;
+
+    eavesElement.setAttribute(
+      "aria-label",
+      "House eaves at south edge of property"
+    );
+
+    landGrid.appendChild(
+      eavesElement
+    );
+
+    const pickupPoints =
+      house.pickup_points ??
+      {};
+
+    const pickupSpecs = [
+      [
+        "kitchen_waste",
+        "Kitchen waste",
+        "kitchen-pickup",
+      ],
+      [
+        "paper_waste",
+        "Paper waste",
+        "paper-pickup",
+      ],
+    ];
+
+    for (
+      const [
+        resourceId,
+        text,
+        extraClass,
+      ]
+      of pickupSpecs
+    ) {
+      const point =
+        pickupPoints[
+          resourceId
+        ];
+
+      if (!point) {
+        continue;
+      }
+
+      const button =
+        document.createElement(
+          "button"
+        );
+
+      button.type =
+        "button";
+
+      button.className =
+        `house-pickup ${extraClass}`;
+
+      button.dataset.resourceId =
+        resourceId;
+
+      button.style.gridColumn =
+        `${Math.floor(Number(point.column)) + 1} / span 2`;
+
+      button.style.gridRow =
+        `${Math.floor(Number(point.row)) + 1} / span 2`;
+
+      const amount =
+        Number(
+          house.outputs
+            ?.[resourceId] ??
+          0
+        );
+
+      const icon =
+        resourceId ===
+          "kitchen_waste"
+          ? "♻"
+          : "▤";
+
+      button.innerHTML =
+        `<span class="pickup-icon" aria-hidden="true">${icon}</span>` +
+        `<span>${text}</span>` +
+        `<strong>${formatAmount(amount, 2)} lb</strong>`;
+
+      button.title =
+        `${text} pickup: ${formatAmount(amount)} lb available`;
+
+      button.setAttribute(
+        "aria-label",
+        `${text} pickup, ${formatAmount(amount)} pounds available`
+      );
+
+      landGrid.appendChild(
+        button
+      );
+    }
+  }
 
   function renderPlacements() {
     landGrid
@@ -2559,23 +3081,17 @@ if (landGrid) {
         instance.instance_id;
 
       image.style.gridColumn =
-        `${
-          instance.column + 1
-        } / span ${
-          instance.width
-        }`;
+        `${instance.column + 1} / span ${instance.width}`;
 
       image.style.gridRow =
-        `${
-          instance.row + 1
-        } / span ${
-          instance.height
-        }`;
+        `${instance.row + 1} / span ${instance.height}`;
 
       landGrid.appendChild(
         image
       );
     }
+
+    renderHouse();
 
     if (avatar) {
       landGrid.appendChild(
@@ -2667,26 +3183,21 @@ if (landGrid) {
     playerList.replaceChildren();
 
     const player =
-      simulationState
-        ?.player;
+      simulationState?.player;
 
     if (player) {
       addListItem(
         playerList,
         "Position",
-        `${
-          formatAmount(
-            player.position
-              ?.column,
-            2
-          )
-        }, ${
-          formatAmount(
-            player.position
-              ?.row,
-            2
-          )
-        }`
+        `${formatAmount(
+          player.position
+            ?.column,
+          2
+        )}, ${formatAmount(
+          player.position
+            ?.row,
+          2
+        )}`
       );
 
       const task =
@@ -2707,19 +3218,15 @@ if (landGrid) {
         addListItem(
           playerList,
           "Destination",
-          `${
-            formatAmount(
-              task.target
-                .column,
-              0
-            )
-          }, ${
-            formatAmount(
-              task.target
-                .row,
-              0
-            )
-          }`
+          `${formatAmount(
+            task.target
+              .column,
+            0
+          )}, ${formatAmount(
+            task.target
+              .row,
+            0
+          )}`
         );
       }
     }
@@ -2778,7 +3285,8 @@ if (landGrid) {
       )
     ) {
       if (
-        key === "total"
+        key ===
+        "total"
       ) {
         continue;
       }
@@ -2861,14 +3369,9 @@ if (landGrid) {
         resourceList,
         resource.name ??
           prettyName(id),
-        `${
-          formatAmount(
-            resource.amount
-          )
-        } ${
-          resource.unit ??
-          ""
-        }`.trim()
+        `${formatAmount(
+          resource.amount
+        )} ${resource.unit ?? ""}`.trim()
       );
     }
 
@@ -2879,9 +3382,7 @@ if (landGrid) {
 
     operationsList.replaceChildren();
 
-    if (
-      !placements.length
-    ) {
+    if (!placements.length) {
       const li =
         document.createElement(
           "li"
@@ -2948,57 +3449,87 @@ if (landGrid) {
     if (
       selectedMapObject
     ) {
-      const refreshedInstance =
-        facilityAt(
+      if (
+        selectedMapObject.kind ===
+        "house"
+      ) {
+        selectedMapObject.house =
+          simulationState?.house;
+
+        if (
+          inspectorMode ===
+          "contents"
+        ) {
+          renderHouseContentsManager(
+            selectedMapObject,
+            selectedMapObject
+              .focusResourceId ??
+              null
+          );
+        } else {
+          renderSelectionSummary(
+            selectedMapObject
+          );
+        }
+
+        manageContentsButton.disabled =
+          false;
+
+        manageContentsButton.title =
+          "Manage household waste pickup";
+      } else {
+        const refreshedInstance =
+          facilityAt(
+            selectedMapObject
+              .column,
+            selectedMapObject
+              .row
+          );
+
+        selectedMapObject.instance =
+          refreshedInstance;
+
+        selectedMapObject.definition =
+          refreshedInstance
+            ? definitionsById.get(
+                refreshedInstance
+                  .facility_id
+              )
+            : definitionsById.get(
+                simulationState
+                  ?.map
+                  ?.default_tile
+              );
+
+        markMapSelection(
           selectedMapObject
             .column,
           selectedMapObject
-            .row
+            .row,
+          refreshedInstance
         );
 
-      selectedMapObject.instance =
-        refreshedInstance;
+        if (
+          inspectorMode ===
+          "contents"
+        ) {
+          renderContentsManager(
+            selectedMapObject
+          );
+        } else {
+          renderSelectionSummary(
+            selectedMapObject
+          );
+        }
 
-      selectedMapObject.definition =
-        refreshedInstance
-          ? definitionsById.get(
-              refreshedInstance
-                .facility_id
-            )
-          : definitionsById.get(
-              simulationState
-                ?.map
-                ?.default_tile
-            );
+        manageContentsButton.disabled =
+          false;
 
-      markMapSelection(
-        selectedMapObject
-          .column,
-        selectedMapObject
-          .row,
-        refreshedInstance
-      );
-
-      if (
-        inspectorMode ===
-        "contents"
-      ) {
-        renderContentsManager(
-          selectedMapObject
-        );
-      } else {
-        renderSelectionSummary(
-          selectedMapObject
-        );
+        manageContentsButton.title =
+          selectedMapObject.instance
+            ? "Manage facility contents"
+            : "View contents available for this tile";
       }
-
-      manageContentsButton.disabled =
-        false;
-
-      manageContentsButton.title =
-        selectedMapObject.instance
-          ? "Manage facility contents"
-          : "View contents available for this tile";
     }
 
     renderAvatar(
@@ -3074,11 +3605,55 @@ if (landGrid) {
           event.clientY
         );
 
+      const clickedPickup =
+        event.target.closest?.(
+          ".house-pickup"
+        ) ??
+        null;
+
+      const clickedEaves =
+        event.target.closest?.(
+          ".house-eaves"
+        ) ??
+        null;
+
       const clickedFacilityElement =
         event.target.closest?.(
           ".placed-building"
         ) ??
         null;
+
+      if (clickedPickup) {
+        if (
+          selectedBuildId
+        ) {
+          cancelPlacement({
+            silent: true,
+          });
+        }
+
+        openHouseSelection(
+          clickedPickup.dataset
+            .resourceId ??
+            null
+        );
+
+        return;
+      }
+
+      if (clickedEaves) {
+        if (
+          selectedBuildId
+        ) {
+          cancelPlacement({
+            silent: true,
+          });
+        }
+
+        openHouseSelection();
+
+        return;
+      }
 
       if (
         clickedFacilityElement
