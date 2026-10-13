@@ -893,20 +893,21 @@ body {
 
 .player-avatar {
   position: absolute;
-  width: 4.7%;
-  height: auto;
+  width: calc(100% / 42);
+  height: calc(100% / 42);
+  object-fit: contain;
   z-index: 12;
   pointer-events: none;
   user-select: none;
-  transform: translate(-50%, -88%);
+  transform: translate(-50%, -100%);
   transform-origin: center bottom;
   image-rendering: pixelated;
-  filter: drop-shadow(1px 2px 1px rgba(20, 25, 19, 0.4));
+  filter: drop-shadow(1px 1px 1px rgba(20, 25, 19, 0.4));
   transition: left 0.82s linear, top 0.82s linear;
 }
 
 .player-avatar.walk-left {
-  transform: translate(-50%, -88%) scaleX(-1);
+  transform: translate(-50%, -100%) scaleX(-1);
 }
 
 .grid-cell.is-map-selected {

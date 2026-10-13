@@ -209,38 +209,27 @@ if (landGrid) {
       return;
     }
 
-    const date =
-      new Date(state.current_time);
+    const date = new Date(state.current_time);
 
     dateElement.textContent =
-      new Intl.DateTimeFormat(
-        undefined,
-        {
-          year: "numeric",
-          month: "short",
-          day: "numeric",
-        }
-      ).format(date);
+      new Intl.DateTimeFormat(undefined, {
+        year: "numeric",
+        month: "short",
+        day: "numeric",
+      }).format(date);
 
     clockElement.textContent =
-      new Intl.DateTimeFormat(
-        undefined,
-        {
-          hour: "numeric",
-          minute: "2-digit",
-        }
-      ).format(date);
+      new Intl.DateTimeFormat(undefined, {
+        hour: "numeric",
+        minute: "2-digit",
+      }).format(date);
   }
 
   // ============================================================
   // Map zoom and pan
   // ============================================================
 
-  function clamp(
-    value,
-    minimum,
-    maximum
-  ) {
+  function clamp(value, minimum, maximum) {
     return Math.min(
       maximum,
       Math.max(minimum, value)
@@ -441,19 +430,16 @@ if (landGrid) {
     (event) => {
       if (
         !mapPointerDown ||
-        event.pointerId !==
-          mapPointerId
+        event.pointerId !== mapPointerId
       ) {
         return;
       }
 
       const deltaX =
-        event.clientX -
-        dragStartX;
+        event.clientX - dragStartX;
 
       const deltaY =
-        event.clientY -
-        dragStartY;
+        event.clientY - dragStartY;
 
       if (!mapDragStarted) {
         if (
@@ -484,10 +470,8 @@ if (landGrid) {
 
       const clamped =
         clampMapPan(
-          dragStartPanX +
-            deltaX,
-          dragStartPanY +
-            deltaY
+          dragStartPanX + deltaX,
+          dragStartPanY + deltaY
         );
 
       mapPanX = clamped.x;
@@ -500,8 +484,7 @@ if (landGrid) {
   function finishMapDrag(event) {
     if (
       !mapPointerDown ||
-      event.pointerId !==
-        mapPointerId
+      event.pointerId !== mapPointerId
     ) {
       return;
     }
@@ -595,16 +578,10 @@ if (landGrid) {
 
     return placements.every(
       (placed) =>
-        column + width <=
-          placed.column ||
-        placed.column +
-          placed.width <=
-          column ||
-        row + height <=
-          placed.row ||
-        placed.row +
-          placed.height <=
-          row
+        column + width <= placed.column ||
+        placed.column + placed.width <= column ||
+        row + height <= placed.row ||
+        placed.row + placed.height <= row
     );
   }
 
@@ -663,6 +640,31 @@ if (landGrid) {
     );
   }
 
+  function syncPlacementUi() {
+    const placementActive =
+      Boolean(selectedBuildId);
+
+    cancelButton.disabled =
+      !placementActive;
+
+    buildList
+      .querySelectorAll(
+        ".build-option"
+      )
+      .forEach(
+        (button) => {
+          button.setAttribute(
+            "aria-pressed",
+            placementActive &&
+              button.dataset.facilityId ===
+                selectedBuildId
+              ? "true"
+              : "false"
+          );
+        }
+      );
+  }
+
   function selectBuild(
     facilityId
   ) {
@@ -671,25 +673,7 @@ if (landGrid) {
 
     closeInspector();
     clearMapSelection();
-
-    cancelButton.disabled =
-      false;
-
-    document
-      .querySelectorAll(
-        ".build-option"
-      )
-      .forEach(
-        (button) => {
-          button.setAttribute(
-            "aria-pressed",
-            button.dataset.facilityId ===
-              facilityId
-              ? "true"
-              : "false"
-          );
-        }
-      );
+    syncPlacementUi();
 
     statusLine.textContent =
       `Place ${
@@ -700,27 +684,20 @@ if (landGrid) {
       } on the map.`;
   }
 
-  function cancelPlacement() {
+  function cancelPlacement(
+    {
+      silent = false,
+    } = {}
+  ) {
     selectedBuildId = null;
 
     removePreview();
+    syncPlacementUi();
 
-    cancelButton.disabled = true;
-
-    document
-      .querySelectorAll(
-        ".build-option"
-      )
-      .forEach(
-        (button) => {
-          button.setAttribute(
-            "aria-pressed",
-            "false"
-          );
-        }
-      );
-
-    if (gameLoaded) {
+    if (
+      !silent &&
+      gameLoaded
+    ) {
       statusLine.textContent =
         "Select a tile or facility to interact.";
     }
@@ -728,7 +705,7 @@ if (landGrid) {
 
   cancelButton.addEventListener(
     "click",
-    cancelPlacement
+    () => cancelPlacement()
   );
 
   async function placeSelectedFacility(
@@ -870,20 +847,37 @@ if (landGrid) {
         text
       );
 
-      button.addEventListener(
-        "click",
-        () => {
-          selectBuild(
-            definition.id
-          );
-        }
-      );
-
       buildList.appendChild(
         button
       );
     }
+
+    syncPlacementUi();
   }
+
+  buildList.addEventListener(
+    "click",
+    (event) => {
+      const button =
+        event.target.closest(
+          ".build-option"
+        );
+
+      if (
+        !button ||
+        !buildList.contains(
+          button
+        )
+      ) {
+        return;
+      }
+
+      selectBuild(
+        button.dataset
+          .facilityId
+      );
+    }
+  );
 
   // ============================================================
   // Selection / interaction popup
@@ -1718,10 +1712,8 @@ if (landGrid) {
       )
     ) {
       if (
-        key ===
-          "groceries_usd" ||
-        key ===
-          "tap_water_gal"
+        key === "groceries_usd" ||
+        key === "tap_water_gal"
       ) {
         continue;
       }
@@ -1964,6 +1956,33 @@ if (landGrid) {
           event.clientX,
           event.clientY
         );
+
+      const clickedFacilityElement =
+        event.target.closest?.(
+          ".placed-building"
+        ) ??
+        null;
+
+      // Existing facilities always take precedence over placement mode.
+      // Clicking one exits placement mode and opens its interaction window.
+      if (
+        clickedFacilityElement
+      ) {
+        if (
+          selectedBuildId
+        ) {
+          cancelPlacement({
+            silent: true,
+          });
+        }
+
+        openSelection(
+          column,
+          row
+        );
+
+        return;
+      }
 
       if (
         selectedBuildId
