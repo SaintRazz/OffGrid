@@ -32,6 +32,13 @@ if (landGrid) {
   const inspectorContent = document.getElementById("object-inspector-content");
   const inspectorCloseButton = document.getElementById("object-inspector-close");
   const walkHereButton = document.getElementById("walk-here-button");
+  const manageContentsButton = document.getElementById("manage-contents-button");
+
+  const playerInventoryList = document.getElementById("player-inventory-list");
+  const playerInventoryResource = document.getElementById("player-inventory-resource");
+  const playerInventoryAmount = document.getElementById("player-inventory-amount");
+  const loadPlayerInventoryButton = document.getElementById("load-player-inventory");
+  const unloadPlayerInventoryButton = document.getElementById("unload-player-inventory");
 
   const mapViewport = document.getElementById("map-viewport");
   const zoomInButton = document.getElementById("zoom-in");
@@ -43,6 +50,7 @@ if (landGrid) {
   const infoPanels = document.querySelectorAll(".info-panel");
 
   const definitionsById = new Map();
+
   let placements = [];
   let simulationState = null;
   let selectedBuildId = null;
@@ -53,6 +61,7 @@ if (landGrid) {
   let mapZoom = 1;
   let mapPanX = 0;
   let mapPanY = 0;
+
   let mapPointerDown = false;
   let mapPointerId = null;
   let mapDragStarted = false;
@@ -66,6 +75,14 @@ if (landGrid) {
   let subTickInFlight = false;
   let gameLoaded = false;
 
+  let inspectorPausedRuntime = false;
+  let inspectorMode = "summary";
+
+  // Strong interaction pause state.
+  let interactionOpen = false;
+  let deferredSubTickState = null;
+  let deferredSubTickMovement = null;
+
   // ============================================================
   // Grid
   // ============================================================
@@ -73,19 +90,27 @@ if (landGrid) {
   for (let row = 0; row < GRID_SIZE; row += 1) {
     for (let column = 0; column < GRID_SIZE; column += 1) {
       const cell = document.createElement("div");
+
       cell.className = "grid-cell";
       cell.dataset.row = String(row);
       cell.dataset.column = String(column);
+
       cell.style.gridRow = String(row + 1);
       cell.style.gridColumn = String(column + 1);
+
       cell.setAttribute("role", "gridcell");
       cell.setAttribute(
         "aria-label",
         `Grass tile, row ${row + 1}, column ${column + 1}`
       );
+
       landGrid.appendChild(cell);
     }
   }
+
+  // ============================================================
+  // General helpers
+  // ============================================================
 
   function formatAmount(value, maximumFractionDigits = 4) {
     return new Intl.NumberFormat(undefined, {
@@ -98,6 +123,21 @@ if (landGrid) {
       .replaceAll("_", " ")
       .replaceAll("-", " ")
       .replace(/\b\w/g, (letter) => letter.toUpperCase());
+  }
+
+  function resourceDefinition(resourceId) {
+    return simulationState?.resource_definitions?.[resourceId] ?? null;
+  }
+
+  function resourceLabel(resourceId) {
+    return resourceDefinition(resourceId)?.name ?? prettyName(resourceId);
+  }
+
+  function resourceUnit(resourceId) {
+    return (
+      resourceDefinition(resourceId)?.unit ??
+      (resourceId === "chicken" ? "bird" : "lb")
+    );
   }
 
   function addListItem(list, label, value) {
@@ -119,7 +159,8 @@ if (landGrid) {
 
     if (!response.ok) {
       throw new Error(
-        data.error || `${response.status} ${response.statusText}`
+        data.error ||
+        `${response.status} ${response.statusText}`
       );
     }
 
@@ -131,16 +172,25 @@ if (landGrid) {
   // ============================================================
 
   function setRuntimeRunning(running, label = null) {
-    runtimeStatus?.classList.toggle("is-running", running);
+    runtimeStatus?.classList.toggle(
+      "is-running",
+      running
+    );
 
     if (runtimeLabel) {
       runtimeLabel.textContent =
-        label ?? (running ? "Running" : "Paused");
+        label ??
+        (running ? "Running" : "Paused");
     }
   }
 
   function startRuntime() {
     if (runtimeTimer !== null) {
+      return;
+    }
+
+    if (interactionOpen) {
+      setRuntimeRunning(false, "Paused for interaction");
       return;
     }
 
@@ -162,7 +212,11 @@ if (landGrid) {
   }
 
   async function runSubTick() {
-    if (!gameLoaded || subTickInFlight) {
+    if (
+      !gameLoaded ||
+      subTickInFlight ||
+      interactionOpen
+    ) {
       return;
     }
 
@@ -176,6 +230,22 @@ if (landGrid) {
           body: "{}",
         }
       );
+
+      /*
+       * The request may have started just before the user opened an
+       * interaction window. In that case we retain the authoritative
+       * state returned by the backend, but we do not redraw the
+       * interaction UI.
+       */
+      if (interactionOpen) {
+        deferredSubTickState =
+          result.state;
+
+        deferredSubTickMovement =
+          result.movement ?? null;
+
+        return;
+      }
 
       renderState(
         result.state,
@@ -204,32 +274,47 @@ if (landGrid) {
       document.getElementById("simulation-clock");
 
     if (!state?.current_time) {
-      dateElement.textContent = "Not started";
-      clockElement.textContent = "--:--";
+      dateElement.textContent =
+        "Not started";
+
+      clockElement.textContent =
+        "--:--";
+
       return;
     }
 
-    const date = new Date(state.current_time);
+    const date =
+      new Date(state.current_time);
 
     dateElement.textContent =
-      new Intl.DateTimeFormat(undefined, {
-        year: "numeric",
-        month: "short",
-        day: "numeric",
-      }).format(date);
+      new Intl.DateTimeFormat(
+        undefined,
+        {
+          year: "numeric",
+          month: "short",
+          day: "numeric",
+        }
+      ).format(date);
 
     clockElement.textContent =
-      new Intl.DateTimeFormat(undefined, {
-        hour: "numeric",
-        minute: "2-digit",
-      }).format(date);
+      new Intl.DateTimeFormat(
+        undefined,
+        {
+          hour: "numeric",
+          minute: "2-digit",
+        }
+      ).format(date);
   }
 
   // ============================================================
   // Map zoom and pan
   // ============================================================
 
-  function clamp(value, minimum, maximum) {
+  function clamp(
+    value,
+    minimum,
+    maximum
+  ) {
     return Math.min(
       maximum,
       Math.max(minimum, value)
@@ -245,14 +330,16 @@ if (landGrid) {
       Math.min(
         0,
         mapViewport.clientWidth -
-          landGrid.offsetWidth * zoom
+          landGrid.offsetWidth *
+            zoom
       );
 
     const minimumY =
       Math.min(
         0,
         mapViewport.clientHeight -
-          landGrid.offsetHeight * zoom
+          landGrid.offsetHeight *
+            zoom
       );
 
     return {
@@ -261,6 +348,7 @@ if (landGrid) {
         minimumX,
         0
       ),
+
       y: clamp(
         panY,
         minimumY,
@@ -273,15 +361,20 @@ if (landGrid) {
     const clamped =
       clampMapPan();
 
-    mapPanX = clamped.x;
-    mapPanY = clamped.y;
+    mapPanX =
+      clamped.x;
+
+    mapPanY =
+      clamped.y;
 
     landGrid.style.transform =
       `translate(${mapPanX}px, ${mapPanY}px) ` +
       `scale(${mapZoom})`;
 
     zoomLevel.textContent =
-      `${Math.round(mapZoom * 100)}%`;
+      `${Math.round(
+        mapZoom * 100
+      )}%`;
 
     mapViewport.classList.toggle(
       "is-zoomed",
@@ -317,12 +410,14 @@ if (landGrid) {
     const focalX =
       clientX == null
         ? rect.width / 2
-        : clientX - rect.left;
+        : clientX -
+          rect.left;
 
     const focalY =
       clientY == null
         ? rect.height / 2
-        : clientY - rect.top;
+        : clientY -
+          rect.top;
 
     const mapX =
       (focalX - mapPanX) /
@@ -340,7 +435,8 @@ if (landGrid) {
       focalY -
       mapY * newZoom;
 
-    mapZoom = newZoom;
+    mapZoom =
+      newZoom;
 
     renderMapTransform();
   }
@@ -414,14 +510,22 @@ if (landGrid) {
       }
 
       mapPointerDown = true;
-      mapPointerId = event.pointerId;
+      mapPointerId =
+        event.pointerId;
+
       mapDragStarted = false;
 
-      dragStartX = event.clientX;
-      dragStartY = event.clientY;
+      dragStartX =
+        event.clientX;
 
-      dragStartPanX = mapPanX;
-      dragStartPanY = mapPanY;
+      dragStartY =
+        event.clientY;
+
+      dragStartPanX =
+        mapPanX;
+
+      dragStartPanY =
+        mapPanY;
     }
   );
 
@@ -430,16 +534,19 @@ if (landGrid) {
     (event) => {
       if (
         !mapPointerDown ||
-        event.pointerId !== mapPointerId
+        event.pointerId !==
+          mapPointerId
       ) {
         return;
       }
 
       const deltaX =
-        event.clientX - dragStartX;
+        event.clientX -
+        dragStartX;
 
       const deltaY =
-        event.clientY - dragStartY;
+        event.clientY -
+        dragStartY;
 
       if (!mapDragStarted) {
         if (
@@ -470,12 +577,17 @@ if (landGrid) {
 
       const clamped =
         clampMapPan(
-          dragStartPanX + deltaX,
-          dragStartPanY + deltaY
+          dragStartPanX +
+            deltaX,
+          dragStartPanY +
+            deltaY
         );
 
-      mapPanX = clamped.x;
-      mapPanY = clamped.y;
+      mapPanX =
+        clamped.x;
+
+      mapPanY =
+        clamped.y;
 
       renderMapTransform();
     }
@@ -484,17 +596,22 @@ if (landGrid) {
   function finishMapDrag(event) {
     if (
       !mapPointerDown ||
-      event.pointerId !== mapPointerId
+      event.pointerId !==
+        mapPointerId
     ) {
       return;
     }
 
     if (mapDragStarted) {
-      suppressNextMapClick = true;
+      suppressNextMapClick =
+        true;
     }
 
-    mapPointerDown = false;
-    mapPointerId = null;
+    mapPointerDown =
+      false;
+
+    mapPointerId =
+      null;
 
     mapViewport.classList.remove(
       "is-dragging"
@@ -511,7 +628,8 @@ if (landGrid) {
       );
     }
 
-    mapDragStarted = false;
+    mapDragStarted =
+      false;
   }
 
   mapViewport.addEventListener(
@@ -535,7 +653,10 @@ if (landGrid) {
       clamp(
         Math.floor(
           (clientX - rect.left) /
-          (rect.width / GRID_SIZE)
+          (
+            rect.width /
+            GRID_SIZE
+          )
         ),
         0,
         GRID_SIZE - 1
@@ -545,7 +666,10 @@ if (landGrid) {
       clamp(
         Math.floor(
           (clientY - rect.top) /
-          (rect.height / GRID_SIZE)
+          (
+            rect.height /
+            GRID_SIZE
+          )
         ),
         0,
         GRID_SIZE - 1
@@ -570,18 +694,26 @@ if (landGrid) {
     if (
       column < 0 ||
       row < 0 ||
-      column + width > GRID_SIZE ||
-      row + height > GRID_SIZE
+      column + width >
+        GRID_SIZE ||
+      row + height >
+        GRID_SIZE
     ) {
       return false;
     }
 
     return placements.every(
       (placed) =>
-        column + width <= placed.column ||
-        placed.column + placed.width <= column ||
-        row + height <= placed.row ||
-        placed.row + placed.height <= row
+        column + width <=
+          placed.column ||
+        placed.column +
+          placed.width <=
+          column ||
+        row + height <=
+          placed.row ||
+        placed.row +
+          placed.height <=
+          row
     );
   }
 
@@ -616,7 +748,8 @@ if (landGrid) {
     preview.src =
       `/static/assets/sprites/${definition.image}`;
 
-    preview.alt = "";
+    preview.alt =
+      "";
 
     preview.style.gridColumn =
       `${column + 1} / span ${definition.width}`;
@@ -642,7 +775,9 @@ if (landGrid) {
 
   function syncPlacementUi() {
     const placementActive =
-      Boolean(selectedBuildId);
+      Boolean(
+        selectedBuildId
+      );
 
     cancelButton.disabled =
       !placementActive;
@@ -705,7 +840,9 @@ if (landGrid) {
 
   cancelButton.addEventListener(
     "click",
-    () => cancelPlacement()
+    () => {
+      cancelPlacement();
+    }
   );
 
   async function placeSelectedFacility(
@@ -791,7 +928,9 @@ if (landGrid) {
           "button"
         );
 
-      button.type = "button";
+      button.type =
+        "button";
+
       button.className =
         "build-option";
 
@@ -814,7 +953,8 @@ if (landGrid) {
       image.src =
         `/static/assets/sprites/${definition.image}`;
 
-      image.alt = "";
+      image.alt =
+        "";
 
       const text =
         document.createElement(
@@ -873,8 +1013,7 @@ if (landGrid) {
       }
 
       selectBuild(
-        button.dataset
-          .facilityId
+        button.dataset.facilityId
       );
     }
   );
@@ -949,6 +1088,499 @@ if (landGrid) {
     }
   }
 
+  // ============================================================
+  // Manage Contents
+  // ============================================================
+
+  function managedContentOptions(
+    selection
+  ) {
+    const instance =
+      selection?.instance;
+
+    const definition =
+      selection?.definition;
+
+    if (
+      !instance ||
+      !definition
+    ) {
+      return [];
+    }
+
+    const container =
+      definition.container ??
+      {};
+
+    const process =
+      definition.process ??
+      {};
+
+    if (
+      definition.id ===
+      "chicken-coop"
+    ) {
+      return [
+        {
+          resourceId:
+            "chicken",
+          label:
+            "Chicken",
+          unit:
+            "bird",
+          step:
+            1,
+          integerOnly:
+            true,
+          currentField:
+            "current_fill",
+          capacity:
+            Number(
+              container.capacity ??
+              0
+            ),
+        },
+      ];
+    }
+
+    if (
+      definition.id ===
+      "bsfl-reactor"
+    ) {
+      return [
+        {
+          resourceId:
+            "bsfl_biomass",
+          label:
+            "BSFL larval biomass",
+          unit:
+            "lb",
+          step:
+            0.1,
+          integerOnly:
+            false,
+          currentField:
+            "larval_biomass",
+          capacity:
+            Number(
+              process.maximum_larval_biomass_lb ??
+              0
+            ),
+        },
+        {
+          resourceId:
+            "kitchen_waste",
+          label:
+            "Kitchen waste",
+          unit:
+            "lb",
+          step:
+            0.1,
+          integerOnly:
+            false,
+          currentField:
+            "feedstock_mass",
+          capacity:
+            Number(
+              container.usable_capacity_lb ??
+              0
+            ),
+        },
+      ];
+    }
+
+    if (
+      definition.id ===
+      "compost-pile"
+    ) {
+      const capacity =
+        Number(
+          container.capacity ??
+          0
+        );
+
+      return Object.entries(
+        definition.inputs ??
+        {}
+      )
+        .filter(
+          ([, rule]) =>
+            rule?.mode ===
+            "shared_feedstock"
+        )
+        .map(
+          ([resourceId]) => ({
+            resourceId,
+            label:
+              prettyName(
+                resourceId
+              ),
+            unit:
+              "lb",
+            step:
+              0.1,
+            integerOnly:
+              false,
+            currentField:
+              "raw_material_mass",
+            capacity,
+          })
+        );
+    }
+
+    return [];
+  }
+
+  function pendingAmount(
+    instanceId,
+    field
+  ) {
+    return (
+      simulationState
+        ?.pending_events ??
+      []
+    )
+      .filter(
+        (event) =>
+          event.type ===
+            "facility_fill" &&
+          event.instance_id ===
+            instanceId &&
+          event.target_field ===
+            field
+      )
+      .reduce(
+        (sum, event) =>
+          sum +
+          Number(
+            event.amount ??
+            0
+          ),
+        0
+      );
+  }
+
+  function renderContentsManager(
+    selection
+  ) {
+    inspectorContent.replaceChildren();
+
+    const options =
+      managedContentOptions(
+        selection
+      );
+
+    if (
+      !selection?.instance ||
+      !options.length
+    ) {
+      const message =
+        document.createElement(
+          "p"
+        );
+
+      message.className =
+        "contents-message";
+
+      message.textContent =
+        "This selection has no manually fillable contents.";
+
+      inspectorContent.appendChild(
+        message
+      );
+
+      return;
+    }
+
+    const intro =
+      document.createElement(
+        "p"
+      );
+
+    intro.className =
+      "contents-message";
+
+    intro.textContent =
+      "Material must be carried by the Homesteader. " +
+      "Transfers into a facility become active at the next hourly full tick, " +
+      "so material added mid-hour is not processed retroactively.";
+
+    inspectorContent.appendChild(
+      intro
+    );
+
+    for (
+      const option
+      of options
+    ) {
+      const current =
+        Number(
+          selection.instance[
+            option.currentField
+          ] ??
+          0
+        );
+
+      const pending =
+        pendingAmount(
+          selection.instance
+            .instance_id,
+          option.currentField
+        );
+
+      const available =
+        Number(
+          simulationState
+            ?.player
+            ?.inventory
+            ?.[option.resourceId] ??
+          0
+        );
+
+      const remaining =
+        Math.max(
+          0,
+          option.capacity -
+            current -
+            pending
+        );
+
+      const maximum =
+        Math.max(
+          0,
+          Math.min(
+            available,
+            remaining
+          )
+        );
+
+      const card =
+        document.createElement(
+          "section"
+        );
+
+      card.className =
+        "contents-row";
+
+      const heading =
+        document.createElement(
+          "h3"
+        );
+
+      heading.textContent =
+        option.label;
+
+      card.appendChild(
+        heading
+      );
+
+      const stats =
+        document.createElement(
+          "p"
+        );
+
+      stats.className =
+        "contents-stats";
+
+      stats.textContent =
+        `Current: ${formatAmount(current)} ${option.unit} · ` +
+        `Pending: ${formatAmount(pending)} ${option.unit} · ` +
+        `Capacity: ${formatAmount(option.capacity)} ${option.unit} · ` +
+        `Carried by Homesteader: ${formatAmount(available)} ${option.unit}`;
+
+      card.appendChild(
+        stats
+      );
+
+      const form =
+        document.createElement(
+          "form"
+        );
+
+      form.className =
+        "contents-form";
+
+      const label =
+        document.createElement(
+          "label"
+        );
+
+      label.textContent =
+        `Amount to add (${option.unit})`;
+
+      const input =
+        document.createElement(
+          "input"
+        );
+
+      input.type =
+        "number";
+
+      input.min =
+        "0";
+
+      input.step =
+        String(
+          option.step
+        );
+
+      input.max =
+        String(
+          maximum
+        );
+
+      input.value =
+        maximum > 0
+          ? String(
+              option.integerOnly
+                ? Math.floor(
+                    maximum
+                  )
+                : Math.min(
+                    maximum,
+                    option.step
+                  )
+            )
+          : "0";
+
+      input.disabled =
+        maximum <= 0;
+
+      label.appendChild(
+        input
+      );
+
+      const addButton =
+        document.createElement(
+          "button"
+        );
+
+      addButton.type =
+        "submit";
+
+      addButton.className =
+        "interaction-button primary";
+
+      addButton.textContent =
+        "Add";
+
+      addButton.disabled =
+        maximum <= 0;
+
+      form.append(
+        label,
+        addButton
+      );
+
+      form.addEventListener(
+        "submit",
+        async (event) => {
+          event.preventDefault();
+
+          const amount =
+            Number(
+              input.value
+            );
+
+          if (
+            !Number.isFinite(
+              amount
+            ) ||
+            amount <= 0
+          ) {
+            statusLine.textContent =
+              "Enter an amount greater than zero.";
+
+            return;
+          }
+
+          try {
+            const result =
+              await api(
+                `/api/facilities/${
+                  encodeURIComponent(
+                    selection.instance
+                      .instance_id
+                  )
+                }/fill`,
+                {
+                  method:
+                    "POST",
+
+                  body:
+                    JSON.stringify(
+                      {
+                        resource_id:
+                          option.resourceId,
+
+                        amount,
+                      }
+                    ),
+                }
+              );
+
+            /*
+             * Direct management actions should update the underlying
+             * authoritative state immediately. This is not an automatic
+             * sub-tick, so it is safe to redraw the current contents view.
+             */
+            simulationState =
+              result.state;
+
+            renderState(
+              result.state
+            );
+
+            if (
+              selectedMapObject
+            ) {
+              selectedMapObject.instance =
+                facilityAt(
+                  selectedMapObject
+                    .column,
+                  selectedMapObject
+                    .row
+                );
+
+              selectedMapObject.definition =
+                definitionsById.get(
+                  selectedMapObject
+                    .instance
+                    ?.facility_id
+                );
+
+              inspectorMode =
+                "contents";
+
+              renderContentsManager(
+                selectedMapObject
+              );
+            }
+
+            statusLine.textContent =
+              `${formatAmount(amount)} ${option.unit} ` +
+              `${option.label.toLowerCase()} staged for the next full tick.`;
+          } catch (error) {
+            statusLine.textContent =
+              error.message;
+          }
+        }
+      );
+
+      card.appendChild(
+        form
+      );
+
+      inspectorContent.appendChild(
+        card
+      );
+    }
+  }
+
+  // ============================================================
+  // Selection summary
+  // ============================================================
+
   function renderSelectionSummary(
     selection
   ) {
@@ -975,7 +1607,9 @@ if (landGrid) {
       ],
     ];
 
-    if (selection.instance) {
+    if (
+      selection.instance
+    ) {
       rows.push([
         "Condition",
         `${formatAmount(
@@ -1065,8 +1699,11 @@ if (landGrid) {
           "dd"
         );
 
-      dt.textContent = label;
-      dd.textContent = value;
+      dt.textContent =
+        label;
+
+      dd.textContent =
+        value;
 
       dl.append(
         dt,
@@ -1083,6 +1720,24 @@ if (landGrid) {
     column,
     row
   ) {
+    interactionOpen =
+      true;
+
+    if (runtimeTimer !== null) {
+      inspectorPausedRuntime =
+        true;
+
+      stopRuntime(
+        "Paused for interaction"
+      );
+    } else {
+      inspectorPausedRuntime =
+        false;
+    }
+
+    inspectorMode =
+      "summary";
+
     const instance =
       facilityAt(
         column,
@@ -1095,7 +1750,8 @@ if (landGrid) {
             instance.facility_id
           )
         : definitionsById.get(
-            simulationState?.map
+            simulationState
+              ?.map
               ?.default_tile
           );
 
@@ -1129,18 +1785,71 @@ if (landGrid) {
       selectedMapObject
     );
 
+    manageContentsButton.disabled =
+      false;
+
+    manageContentsButton.title =
+      selectedMapObject.instance
+        ? "Manage facility contents"
+        : "View contents available for this tile";
+
     inspectorOverlay.hidden =
       false;
 
     walkHereButton.focus();
   }
 
-  function closeInspector() {
+  function closeInspector(
+    {
+      resume = true,
+    } = {}
+  ) {
+    const shouldResume =
+      resume &&
+      inspectorPausedRuntime &&
+      gameLoaded;
+
     inspectorOverlay.hidden =
       true;
 
     selectedMapObject =
       null;
+
+    inspectorMode =
+      "summary";
+
+    inspectorPausedRuntime =
+      false;
+
+    interactionOpen =
+      false;
+
+    /*
+     * If a sub-tick response arrived after the interaction window opened,
+     * apply that state now that the interaction UI is closed.
+     */
+    if (deferredSubTickState) {
+      const state =
+        deferredSubTickState;
+
+      const movement =
+        deferredSubTickMovement;
+
+      deferredSubTickState =
+        null;
+
+      deferredSubTickMovement =
+        null;
+
+      renderState(
+        state,
+        movement
+      );
+    }
+
+    if (shouldResume) {
+      startRuntime();
+    }
   }
 
   inspectorCloseButton.addEventListener(
@@ -1178,30 +1887,58 @@ if (landGrid) {
           await api(
             "/api/player/walk",
             {
-              method: "POST",
-              body: JSON.stringify({
-                column,
-                row,
-              }),
+              method:
+                "POST",
+
+              body:
+                JSON.stringify(
+                  {
+                    column,
+                    row,
+                  }
+                ),
             }
           );
+
+        simulationState =
+          result.state;
 
         renderState(
           result.state
         );
 
+        /*
+         * Walking should close the interaction window and allow
+         * automatic time to resume.
+         */
         closeInspector();
         clearMapSelection();
 
         statusLine.textContent =
           result.status ===
-          "already_there"
+            "already_there"
             ? "Homesteader is already at that location."
             : `Walking to tile ${column + 1}, ${row + 1}.`;
       } catch (error) {
         statusLine.textContent =
           error.message;
       }
+    }
+  );
+
+  manageContentsButton.addEventListener(
+    "click",
+    () => {
+      if (!selectedMapObject) {
+        return;
+      }
+
+      inspectorMode =
+        "contents";
+
+      renderContentsManager(
+        selectedMapObject
+      );
     }
   );
 
@@ -1298,13 +2035,15 @@ if (landGrid) {
     }
 
     if (
-      direction === "up"
+      direction ===
+      "up"
     ) {
       return "/static/assets/sprites/HomesteaderWalkAway.png";
     }
 
     if (
-      direction === "down"
+      direction ===
+      "down"
     ) {
       return "/static/assets/sprites/HomesteaderWalkToward.png";
     }
@@ -1413,6 +2152,355 @@ if (landGrid) {
       );
     }
   }
+
+  // ============================================================
+  // Homesteader inventory
+  // ============================================================
+
+  function inventoryResourceIds() {
+    const ids =
+      new Set([
+        ...Object.keys(
+          simulationState
+            ?.inventories ??
+          {}
+        ),
+
+        ...Object.keys(
+          simulationState
+            ?.player
+            ?.inventory ??
+          {}
+        ),
+
+        ...Object.keys(
+          simulationState
+            ?.resource_definitions ??
+          {}
+        ),
+      ]);
+
+    return [...ids].sort(
+      (a, b) =>
+        resourceLabel(a)
+          .localeCompare(
+            resourceLabel(b)
+          )
+    );
+  }
+
+  function renderPlayerInventoryControls() {
+    if (
+      !playerInventoryList ||
+      !playerInventoryResource
+    ) {
+      return;
+    }
+
+    playerInventoryList.replaceChildren();
+
+    const carried =
+      simulationState
+        ?.player
+        ?.inventory ??
+      {};
+
+    const carriedEntries =
+      Object.entries(
+        carried
+      )
+        .filter(
+          ([, amount]) =>
+            Number(amount) >
+            1e-9
+        )
+        .sort(
+          ([a], [b]) =>
+            resourceLabel(a)
+              .localeCompare(
+                resourceLabel(b)
+              )
+        );
+
+    if (
+      !carriedEntries.length
+    ) {
+      const item =
+        document.createElement(
+          "li"
+        );
+
+      item.textContent =
+        "Nothing carried.";
+
+      playerInventoryList.appendChild(
+        item
+      );
+    } else {
+      for (
+        const [
+          resourceId,
+          amount,
+        ]
+        of carriedEntries
+      ) {
+        addListItem(
+          playerInventoryList,
+          resourceLabel(
+            resourceId
+          ),
+          `${formatAmount(amount)} ${resourceUnit(resourceId)}`
+        );
+      }
+    }
+
+    const previousSelection =
+      playerInventoryResource.value;
+
+    playerInventoryResource.replaceChildren();
+
+    for (
+      const resourceId
+      of inventoryResourceIds()
+    ) {
+      const householdAmount =
+        Number(
+          simulationState
+            ?.inventories
+            ?.[resourceId] ??
+          0
+        );
+
+      const carriedAmount =
+        Number(
+          carried
+            ?.[resourceId] ??
+          0
+        );
+
+      if (
+        householdAmount <=
+          1e-9 &&
+        carriedAmount <=
+          1e-9
+      ) {
+        continue;
+      }
+
+      const option =
+        document.createElement(
+          "option"
+        );
+
+      option.value =
+        resourceId;
+
+      option.textContent =
+        `${resourceLabel(resourceId)} — ` +
+        `household ${formatAmount(householdAmount)} ${resourceUnit(resourceId)}, ` +
+        `carried ${formatAmount(carriedAmount)} ${resourceUnit(resourceId)}`;
+
+      playerInventoryResource.appendChild(
+        option
+      );
+    }
+
+    if (
+      !playerInventoryResource
+        .options
+        .length
+    ) {
+      const option =
+        document.createElement(
+          "option"
+        );
+
+      option.value =
+        "";
+
+      option.textContent =
+        "No transferable resources";
+
+      playerInventoryResource.appendChild(
+        option
+      );
+
+      playerInventoryResource.disabled =
+        true;
+
+      playerInventoryAmount.disabled =
+        true;
+
+      loadPlayerInventoryButton.disabled =
+        true;
+
+      unloadPlayerInventoryButton.disabled =
+        true;
+
+      return;
+    }
+
+    playerInventoryResource.disabled =
+      false;
+
+    playerInventoryAmount.disabled =
+      false;
+
+    loadPlayerInventoryButton.disabled =
+      false;
+
+    unloadPlayerInventoryButton.disabled =
+      false;
+
+    if (
+      [
+        ...playerInventoryResource.options,
+      ].some(
+        (option) =>
+          option.value ===
+          previousSelection
+      )
+    ) {
+      playerInventoryResource.value =
+        previousSelection;
+    }
+
+    syncInventoryAmountStep();
+  }
+
+  function syncInventoryAmountStep() {
+    const resourceId =
+      playerInventoryResource
+        ?.value;
+
+    if (
+      !resourceId ||
+      !playerInventoryAmount
+    ) {
+      return;
+    }
+
+    const integerOnly =
+      resourceId ===
+      "chicken";
+
+    playerInventoryAmount.step =
+      integerOnly
+        ? "1"
+        : "0.1";
+
+    if (integerOnly) {
+      playerInventoryAmount.value =
+        String(
+          Math.max(
+            1,
+            Math.floor(
+              Number(
+                playerInventoryAmount
+                  .value
+              ) ||
+              1
+            )
+          )
+        );
+    }
+  }
+
+  async function transferPlayerInventory(
+    direction
+  ) {
+    const resourceId =
+      playerInventoryResource
+        ?.value;
+
+    const amount =
+      Number(
+        playerInventoryAmount
+          ?.value
+      );
+
+    if (!resourceId) {
+      statusLine.textContent =
+        "Select a resource to transfer.";
+
+      return;
+    }
+
+    if (
+      !Number.isFinite(
+        amount
+      ) ||
+      amount <= 0
+    ) {
+      statusLine.textContent =
+        "Enter an amount greater than zero.";
+
+      return;
+    }
+
+    try {
+      const result =
+        await api(
+          "/api/player/inventory/transfer",
+          {
+            method:
+              "POST",
+
+            body:
+              JSON.stringify(
+                {
+                  resource_id:
+                    resourceId,
+
+                  amount,
+
+                  direction,
+                }
+              ),
+          }
+        );
+
+      simulationState =
+        result.state;
+
+      renderState(
+        result.state
+      );
+
+      statusLine.textContent =
+        direction ===
+          "to_player"
+          ? `${formatAmount(amount)} ${resourceUnit(resourceId)} ${resourceLabel(resourceId)} loaded onto the Homesteader.`
+          : `${formatAmount(amount)} ${resourceUnit(resourceId)} ${resourceLabel(resourceId)} returned to household stores.`;
+    } catch (error) {
+      statusLine.textContent =
+        error.message;
+    }
+  }
+
+  playerInventoryResource
+    ?.addEventListener(
+      "change",
+      syncInventoryAmountStep
+    );
+
+  loadPlayerInventoryButton
+    ?.addEventListener(
+      "click",
+      () =>
+        transferPlayerInventory(
+          "to_player"
+        )
+    );
+
+  unloadPlayerInventoryButton
+    ?.addEventListener(
+      "click",
+      () =>
+        transferPlayerInventory(
+          "to_household"
+        )
+    );
 
   // ============================================================
   // State rendering
@@ -1579,7 +2667,8 @@ if (landGrid) {
     playerList.replaceChildren();
 
     const player =
-      simulationState?.player;
+      simulationState
+        ?.player;
 
     if (player) {
       addListItem(
@@ -1606,12 +2695,15 @@ if (landGrid) {
       addListItem(
         playerList,
         "Activity",
-        task?.type === "walk"
+        task?.type ===
+          "walk"
           ? `Walking ${task.direction}`
           : "Idle"
       );
 
-      if (task?.target) {
+      if (
+        task?.target
+      ) {
         addListItem(
           playerList,
           "Destination",
@@ -1631,6 +2723,8 @@ if (landGrid) {
         );
       }
     }
+
+    renderPlayerInventoryControls();
 
     const {
       flows,
@@ -1712,8 +2806,10 @@ if (landGrid) {
       )
     ) {
       if (
-        key === "groceries_usd" ||
-        key === "tap_water_gal"
+        key ===
+          "groceries_usd" ||
+        key ===
+          "tap_water_gal"
       ) {
         continue;
       }
@@ -1751,7 +2847,10 @@ if (landGrid) {
     resourceList.replaceChildren();
 
     for (
-      const [id, resource]
+      const [
+        id,
+        resource,
+      ]
       of Object.entries(
         simulationState
           ?.resources ??
@@ -1822,7 +2921,8 @@ if (landGrid) {
     state,
     movement = null
   ) {
-    simulationState = state;
+    simulationState =
+      state;
 
     definitionsById.clear();
 
@@ -1879,9 +2979,26 @@ if (landGrid) {
         refreshedInstance
       );
 
-      renderSelectionSummary(
-        selectedMapObject
-      );
+      if (
+        inspectorMode ===
+        "contents"
+      ) {
+        renderContentsManager(
+          selectedMapObject
+        );
+      } else {
+        renderSelectionSummary(
+          selectedMapObject
+        );
+      }
+
+      manageContentsButton.disabled =
+        false;
+
+      manageContentsButton.title =
+        selectedMapObject.instance
+          ? "Manage facility contents"
+          : "View contents available for this tile";
     }
 
     renderAvatar(
@@ -1963,8 +3080,6 @@ if (landGrid) {
         ) ??
         null;
 
-      // Existing facilities always take precedence over placement mode.
-      // Clicking one exits placement mode and opens its interaction window.
       if (
         clickedFacilityElement
       ) {
@@ -2014,7 +3129,8 @@ if (landGrid) {
           infoTabs.forEach(
             (candidate) => {
               const active =
-                candidate === tab;
+                candidate ===
+                tab;
 
               candidate.classList.toggle(
                 "is-active",
@@ -2058,7 +3174,8 @@ if (landGrid) {
     name,
     state
   ) {
-    gameLoaded = true;
+    gameLoaded =
+      true;
 
     currentGameName.textContent =
       name ||
@@ -2095,8 +3212,10 @@ if (landGrid) {
         await api(
           "/api/new-game",
           {
-            method: "POST",
-            body: "{}",
+            method:
+              "POST",
+            body:
+              "{}",
           }
         );
 
@@ -2135,7 +3254,8 @@ if (landGrid) {
         );
 
       if (
-        !result.saves?.length
+        !result.saves
+          ?.length
       ) {
         const message =
           document.createElement(
@@ -2218,11 +3338,16 @@ if (landGrid) {
         await api(
           "/api/load-game",
           {
-            method: "POST",
-            body: JSON.stringify({
-              save_id:
-                saveId,
-            }),
+            method:
+              "POST",
+
+            body:
+              JSON.stringify(
+                {
+                  save_id:
+                    saveId,
+                }
+              ),
           }
         );
 

@@ -188,6 +188,28 @@ def advance_subtick():
     return jsonify(result)
 
 
+@app.post("/api/player/inventory/transfer")
+def transfer_player_inventory():
+    payload = request.get_json(silent=True) or {}
+
+    try:
+        with SIMULATION_LOCK:
+            event = get_simulation().transfer_player_inventory(
+                resource_id=payload.get("resource_id"),
+                amount=payload.get("amount"),
+                direction=payload.get("direction"),
+            )
+            state = get_simulation().state()
+    except (RuntimeError, OSError, TypeError, ValueError, KeyError) as exc:
+        return jsonify({"error": str(exc)}), 400
+
+    return jsonify({
+        "status": "transferred",
+        "event": event,
+        "state": state,
+    })
+
+
 @app.post("/api/player/walk")
 def walk_player():
     payload = request.get_json(silent=True) or {}
@@ -225,6 +247,28 @@ def place_facility():
         return jsonify({"error": str(exc)}), 400
 
     return jsonify({"instance": instance, "state": state}), 201
+
+
+@app.post("/api/facilities/<instance_id>/fill")
+def fill_facility(instance_id):
+    payload = request.get_json(silent=True) or {}
+
+    try:
+        with SIMULATION_LOCK:
+            event = get_simulation().fill_facility(
+                instance_id=instance_id,
+                resource_id=payload.get("resource_id"),
+                amount=payload.get("amount"),
+            )
+            state = get_simulation().state()
+    except (RuntimeError, OSError, TypeError, ValueError, KeyError) as exc:
+        return jsonify({"error": str(exc)}), 400
+
+    return jsonify({
+        "status": "staged",
+        "event": event,
+        "state": state,
+    })
 
 
 @app.post("/api/tick")

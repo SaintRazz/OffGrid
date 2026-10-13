@@ -38,7 +38,7 @@
           <button id="walk-here-button" class="interaction-button primary" type="button">Walk Here</button>
           <button class="interaction-button" type="button" disabled title="Not implemented in this push">Details</button>
           <button class="interaction-button" type="button" disabled title="Not implemented in this push">Maintenance</button>
-          <button class="interaction-button" type="button" disabled title="Not implemented in this push">Manage Contents</button>
+          <button id="manage-contents-button" class="interaction-button" type="button" title="Manage facility contents">Manage Contents</button>
         </div>
         <div id="object-inspector-content" class="object-inspector-content"></div>
       </section>
@@ -77,6 +77,25 @@
               <ul id="household-summary-list" aria-live="polite"><li>No game loaded.</li></ul>
               <h4>Homesteader</h4>
               <ul id="player-status-list" aria-live="polite"><li>No game loaded.</li></ul>
+
+              <h4>Carried Inventory</h4>
+              <ul id="player-inventory-list" aria-live="polite"><li>Nothing carried.</li></ul>
+
+              <div class="player-inventory-transfer" aria-label="Transfer inventory between household stores and the Homesteader">
+                <label>
+                  Resource
+                  <select id="player-inventory-resource"></select>
+                </label>
+                <label>
+                  Amount
+                  <input id="player-inventory-amount" type="number" min="0" step="0.1" value="0.1">
+                </label>
+                <div class="player-inventory-transfer-actions">
+                  <button id="load-player-inventory" class="control-button" type="button">Load</button>
+                  <button id="unload-player-inventory" class="control-button" type="button">Unload</button>
+                </div>
+                <p class="panel-note">Load moves a resource from household stores to the Homesteader. Unload moves it back.</p>
+              </div>
             </section>
             <section id="consumption-panel" class="info-panel" hidden>
               <h3>Consumption</h3>

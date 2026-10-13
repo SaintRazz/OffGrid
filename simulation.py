@@ -123,6 +123,7 @@ class Simulation:
         position.setdefault("row", float(max(0, int(map_state["height_tiles"]) - 1)))
         player.setdefault("current_task", None)
         player.setdefault("last_direction", "down")
+        player.setdefault("inventory", {})
 
         for instance in self.game_state["facilities"]:
             self._normalize_instance(instance)
@@ -407,6 +408,229 @@ class Simulation:
 
         return f"{prefix}-{number:03d}"
 
+
+    # ------------------------------------------------------------------
+    # Facility content transfers
+    # ------------------------------------------------------------------
+
+    def _find_facility_instance(self, instance_id):
+        for instance in self.game_state["facilities"]:
+            if instance.get("instance_id") == instance_id:
+                self._normalize_instance(instance)
+                return instance
+        raise ValueError("Facility instance not found.")
+
+    def _fill_spec(self, instance, resource_id):
+        """Return the supported destination field/capacity for a fill action."""
+        facility_id = instance.get("facility_id")
+        definition = self.facility_definitions.get(facility_id) or {}
+        container = definition.get("container") or {}
+        process = definition.get("process") or {}
+
+        if facility_id == "chicken-coop" and resource_id == "chicken":
+            return {
+                "field": "current_fill",
+                "capacity": float(container.get("capacity", 0.0)),
+                "unit": "bird",
+                "integer_only": True,
+            }
+
+        if facility_id == "bsfl-reactor":
+            if resource_id == "bsfl_biomass":
+                return {
+                    "field": "larval_biomass",
+                    "capacity": float(process.get("maximum_larval_biomass_lb", 0.0)),
+                    "unit": "lb",
+                    "integer_only": False,
+                }
+            if resource_id == "kitchen_waste":
+                return {
+                    "field": "feedstock_mass",
+                    "capacity": float(container.get("usable_capacity_lb", 0.0)),
+                    "unit": "lb",
+                    "integer_only": False,
+                }
+
+        if facility_id == "compost-pile":
+            rule = (definition.get("inputs") or {}).get(resource_id) or {}
+            if rule.get("mode") == "shared_feedstock":
+                return {
+                    "field": "raw_material_mass",
+                    "capacity": float(container.get("capacity", 0.0)),
+                    "unit": "lb",
+                    "integer_only": False,
+                }
+
+        raise ValueError("That material cannot be added to this facility.")
+
+    def _pending_fill_for_field(self, instance_id, field):
+        total = 0.0
+        for event in self.game_state.get("pending_events", []):
+            if (
+                event.get("type") == "facility_fill"
+                and event.get("instance_id") == instance_id
+                and event.get("target_field") == field
+            ):
+                total += float(event.get("amount", 0.0))
+        return total
+
+    def fill_facility(self, instance_id, resource_id, amount):
+        """Stage material/organisms for addition at the next full tick.
+
+        Inventory is reserved immediately, while the actual facility state change
+        is journaled in pending_events and applied after the current hour's full
+        processing pass. This prevents a sub-tick addition from being treated as
+        though it had been present for the entire preceding hour.
+        """
+        if not isinstance(instance_id, str) or not instance_id:
+            raise ValueError("A facility instance must be selected.")
+        if not isinstance(resource_id, str) or not resource_id:
+            raise ValueError("A material must be selected.")
+
+        try:
+            amount = float(amount)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Fill amount must be numeric.") from exc
+
+        if amount <= 0:
+            raise ValueError("Fill amount must be greater than zero.")
+
+        instance = self._find_facility_instance(instance_id)
+        spec = self._fill_spec(instance, resource_id)
+
+        if spec["integer_only"] and not amount.is_integer():
+            raise ValueError("Chickens must be added in whole birds.")
+
+        available = self._player_inventory_amount(resource_id)
+        if amount > available + 1e-9:
+            raise ValueError(
+                f"The Homesteader is not carrying enough "
+                f"{resource_id.replace('_', ' ')}. Available: {available:g}."
+            )
+
+        current = max(0.0, float(instance.get(spec["field"], 0.0)))
+        pending = self._pending_fill_for_field(instance_id, spec["field"])
+        capacity = max(0.0, float(spec["capacity"]))
+        remaining = max(0.0, capacity - current - pending)
+
+        if amount > remaining + 1e-9:
+            raise ValueError(
+                f"That exceeds the remaining capacity ({remaining:g} {spec['unit']})."
+            )
+
+        used = self._consume_player_inventory(resource_id, amount)
+        if used + 1e-9 < amount:
+            raise ValueError("Carried inventory changed before the transfer could be reserved.")
+
+        event = self._append_pending_event({
+            "type": "facility_fill",
+            "instance_id": instance_id,
+            "facility_id": instance.get("facility_id"),
+            "resource_id": resource_id,
+            "amount": amount,
+            "target_field": spec["field"],
+            "unit": spec["unit"],
+            "effective": "next_full_tick",
+        })
+        self.save()
+        return deepcopy(event)
+
+    def _apply_pending_facility_fills(self, events):
+        applied = []
+        for event in events:
+            if event.get("type") != "facility_fill":
+                continue
+
+            instance = self._find_facility_instance(event.get("instance_id"))
+            field = event.get("target_field")
+            amount = max(0.0, float(event.get("amount", 0.0)))
+            if not field or amount <= 0:
+                continue
+
+            instance[field] = max(0.0, float(instance.get(field, 0.0))) + amount
+            applied.append(deepcopy(event))
+
+        return applied
+
+    # ------------------------------------------------------------------
+    # Player inventory transfers
+    # ------------------------------------------------------------------
+
+    def _player_inventory_amount(self, resource_id):
+        player = self.game_state["player"]
+        inventory = player.setdefault("inventory", {})
+        return float(inventory.get(resource_id, 0.0))
+
+    def _add_player_inventory(self, resource_id, amount):
+        if amount <= 0:
+            return
+        inventory = self.game_state["player"].setdefault("inventory", {})
+        inventory[resource_id] = float(inventory.get(resource_id, 0.0)) + amount
+
+    def _consume_player_inventory(self, resource_id, requested):
+        if requested <= 0:
+            return 0.0
+        inventory = self.game_state["player"].setdefault("inventory", {})
+        available = float(inventory.get(resource_id, 0.0))
+        used = min(available, requested)
+        inventory[resource_id] = available - used
+        return used
+
+    def transfer_player_inventory(self, resource_id, amount, direction):
+        """Move a resource between household stores and the Homesteader.
+
+        This is an immediate inventory transfer. It does not run facility
+        processing and therefore does not require the hourly event journal.
+        Carry-capacity rules can be layered onto this method later without
+        changing the browser/API contract.
+        """
+        if not isinstance(resource_id, str) or not resource_id:
+            raise ValueError("A resource must be selected.")
+
+        try:
+            amount = float(amount)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Transfer amount must be numeric.") from exc
+
+        if amount <= 0:
+            raise ValueError("Transfer amount must be greater than zero.")
+
+        if resource_id == "chicken" and not amount.is_integer():
+            raise ValueError("Chickens must be transferred in whole birds.")
+
+        if direction == "to_player":
+            available = self._inventory_amount(resource_id)
+            if amount > available + 1e-9:
+                raise ValueError(
+                    f"Not enough {resource_id.replace('_', ' ')} in household inventory. "
+                    f"Available: {available:g}."
+                )
+            used = self._consume_inventory(resource_id, amount)
+            self._add_player_inventory(resource_id, used)
+
+        elif direction == "to_household":
+            available = self._player_inventory_amount(resource_id)
+            if amount > available + 1e-9:
+                raise ValueError(
+                    f"The Homesteader is not carrying enough "
+                    f"{resource_id.replace('_', ' ')}. Available: {available:g}."
+                )
+            used = self._consume_player_inventory(resource_id, amount)
+            self._add_inventory(resource_id, used)
+
+        else:
+            raise ValueError("Transfer direction must be to_player or to_household.")
+
+        event = self._append_pending_event({
+            "type": "inventory_transfer",
+            "resource_id": resource_id,
+            "amount": amount,
+            "direction": direction,
+            "effective": "immediate",
+        })
+        self.save()
+        return deepcopy(event)
+
     # ------------------------------------------------------------------
     # Player movement and sub-ticks
     # ------------------------------------------------------------------
@@ -533,10 +757,6 @@ class Simulation:
         full_tick_result = None
         if full_tick_due:
             time_state["minute"] = 0
-            self.game_state["last_full_tick_events"] = deepcopy(
-                self.game_state.get("pending_events", [])
-            )
-            self.game_state["pending_events"] = []
             full_tick_result = self.advance_hour()
         elif movement.get("completed"):
             # Important player events are persisted immediately even though
@@ -558,6 +778,7 @@ class Simulation:
     def advance_hour(self):
         processed_day = self.game_state["time"]["day"]
         processed_hour = self.game_state["time"]["hour"]
+        pending_events = deepcopy(self.game_state.get("pending_events", []))
 
         self._reset_tick_flows()
         household_operation = self._process_household_baseline()
@@ -594,6 +815,12 @@ class Simulation:
 
         self._finalize_external_utility_flows()
 
+        # Sub-tick facility fills become effective only after the just-finished
+        # hour has been processed. This prevents retroactive full-hour output.
+        applied_fills = self._apply_pending_facility_fills(pending_events)
+        self.game_state["last_full_tick_events"] = pending_events
+        self.game_state["pending_events"] = []
+
         self._advance_clock()
         self.save()
 
@@ -603,6 +830,7 @@ class Simulation:
                 "hour": processed_hour,
             },
             "operations": operations,
+            "applied_pending_fills": applied_fills,
             "state": self.state(),
         }
 
@@ -742,6 +970,17 @@ class Simulation:
 
         for profile_key, flow_key in waste_key_map.items():
             flows[flow_key] = household_flows.get(profile_key, 0.0)
+
+        # Kitchen waste is a recoverable household material rather than only
+        # a reporting flow. At the agreed baseline of 2 lb/day for the
+        # four-person household, this adds 1/12 lb per full hourly tick.
+        # It accumulates in household stores until the Homesteader carries it
+        # to a compost pile, BSFL reactor, or another future destination.
+        kitchen_waste = max(
+            0.0,
+            float(household_flows.get("kitchen_waste_lb", 0.0)),
+        )
+        self._add_inventory("kitchen_waste", kitchen_waste)
 
         total_electricity = electricity.get("total", 0.0)
         flows["electricity_consumed_this_tick_kwh"] = total_electricity

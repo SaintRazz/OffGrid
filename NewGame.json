@@ -19,7 +19,9 @@
     "kitchen_waste": 0.0,
     "plant_litter": 0.0,
     "organic_residue": 0.0,
-    "non_potable_water": 0.0
+    "non_potable_water": 0.0,
+    "chicken": 0.0,
+    "bsfl_biomass": 0.0
   },
   "current_flows": {
     "electricity_generated_this_tick_kwh": 0.0,
@@ -42,7 +44,8 @@
       "row": 41.0
     },
     "current_task": null,
-    "last_direction": "down"
+    "last_direction": "down",
+    "inventory": {}
   },
   "pending_events": [],
   "last_full_tick_events": []

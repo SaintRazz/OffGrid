@@ -971,3 +971,104 @@ body {
     display: none;
   }
 }
+
+/* ------------------------------------------------------------
+   Facility contents manager
+   ------------------------------------------------------------ */
+
+.contents-message {
+  margin: 0 0 0.85rem;
+  color: var(--muted);
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
+.contents-row {
+  padding: 0.75rem 0;
+  border-top: 1px solid rgba(42, 47, 42, 0.25);
+}
+
+.contents-row:first-of-type {
+  border-top: 0;
+}
+
+.contents-row h3 {
+  margin: 0 0 0.35rem;
+  font-size: 0.95rem;
+}
+
+.contents-stats {
+  margin: 0 0 0.6rem;
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.4;
+}
+
+.contents-form {
+  display: flex;
+  align-items: end;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+
+.contents-form label {
+  display: grid;
+  gap: 0.25rem;
+  min-width: 180px;
+  flex: 1 1 220px;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.contents-form input {
+  width: 100%;
+  min-height: 38px;
+  box-sizing: border-box;
+  padding: 0.4rem 0.5rem;
+  border: 1px solid var(--panel-border);
+  background: #fffef6;
+  color: var(--ink);
+  font: inherit;
+}
+
+.contents-form .interaction-button {
+  min-width: 90px;
+}
+
+/* ------------------------------------------------------------
+   Homesteader carried inventory
+   ------------------------------------------------------------ */
+
+.player-inventory-transfer {
+  display: grid;
+  gap: 0.5rem;
+  margin-top: 0.7rem;
+  padding-top: 0.7rem;
+  border-top: 1px solid rgba(42, 47, 42, 0.28);
+}
+
+.player-inventory-transfer label {
+  display: grid;
+  gap: 0.25rem;
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.player-inventory-transfer select,
+.player-inventory-transfer input {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 0.4rem 0.45rem;
+  border: 1px solid var(--panel-border);
+  background: #f8f7ef;
+  color: var(--ink);
+  font: inherit;
+  font-weight: 400;
+}
+
+.player-inventory-transfer-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.45rem;
+}
