@@ -1294,3 +1294,94 @@ body {
     grid-template-columns: 1fr;
   }
 }
+
+/* ============================================================
+   Homesteader activity queue
+   ============================================================ */
+
+.current-task-card {
+  display: grid;
+  gap: 0.2rem;
+  margin-bottom: 0.75rem;
+  padding: 0.6rem;
+  border: 1px solid rgba(42, 47, 42, 0.35);
+  background: #eef0df;
+  font-size: 0.78rem;
+}
+
+.current-task-card strong,
+.task-queue-item strong {
+  font-size: 0.8rem;
+}
+
+.current-task-card span,
+.task-queue-item span {
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+.task-queue-list {
+  display: grid;
+  gap: 0.4rem;
+  margin-bottom: 0.85rem;
+}
+
+.task-queue-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.45rem;
+  align-items: center;
+  padding: 0.45rem;
+  border: 1px solid rgba(42, 47, 42, 0.28);
+  background: rgba(255, 255, 255, 0.35);
+}
+
+.task-queue-item > div {
+  min-width: 0;
+  display: grid;
+  gap: 0.12rem;
+}
+
+.task-cancel-button {
+  border: 1px solid var(--panel-border);
+  background: #f6f5ec;
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.68rem;
+  padding: 0.25rem 0.4rem;
+  cursor: pointer;
+}
+
+.task-cancel-button:hover {
+  background: #eadfd4;
+}
+
+.player-avatar {
+  pointer-events: auto;
+  cursor: help;
+}
+
+.player-task-tooltip {
+  position: absolute;
+  z-index: 30;
+  width: min(15rem, 36%);
+  transform: translate(-8%, calc(-100% - 1.2rem));
+  display: grid;
+  gap: 0.12rem;
+  padding: 0.42rem 0.5rem;
+  border: 1px solid #3f443d;
+  background: rgba(249, 247, 230, 0.96);
+  color: var(--ink);
+  box-shadow: 2px 2px 0 rgba(30, 28, 24, 0.25);
+  font-size: clamp(0.38rem, 0.6vw, 0.62rem);
+  line-height: 1.2;
+  pointer-events: none;
+}
+
+.player-task-tooltip[hidden] {
+  display: none;
+}
+
+.player-task-tooltip strong {
+  font-size: 1.05em;
+}

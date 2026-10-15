@@ -1,4 +1,5 @@
 import json
+import math
 from copy import deepcopy
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -10,6 +11,12 @@ HOURS_PER_YEAR = 365 * HOURS_PER_DAY
 WALKING_SPEED_FT_PER_MINUTE = 264.0
 
 ORDER_CATALOG = {
+    "feed": {
+        "resource_id": "feed",
+        "name": "Chicken feed",
+        "unit": "lb",
+        "integer_only": False,
+    },
     "chicken": {
         "resource_id": "chicken",
         "name": "Laying hen",
@@ -162,9 +169,21 @@ class Simulation:
         position = player.setdefault("position", {})
         position.setdefault("column", 0.0)
         position.setdefault("row", float(max(0, int(map_state["height_tiles"]) - 1)))
-        player.setdefault("current_task", None)
         player.setdefault("last_direction", "down")
         player.setdefault("inventory", {})
+        queue = player.setdefault("task_queue", [])
+        player.setdefault("next_task_id", 1)
+
+        # Migrate the old single walking task into the new persistent queue.
+        old_task = player.pop("current_task", None)
+        if old_task and not queue:
+            old_task = deepcopy(old_task)
+            old_task.setdefault("task_id", self._next_task_id())
+            old_task.setdefault("description", "Walk to selected tile")
+            old_task.setdefault("phase", "travel")
+            old_task.setdefault("work_minutes_total", 0)
+            old_task.setdefault("work_minutes_remaining", 0)
+            queue.append(old_task)
 
         for instance in self.game_state["facilities"]:
             self._normalize_instance(instance)
@@ -205,6 +224,9 @@ class Simulation:
         # BSFL state migration: older saves tracked growing and mature larvae
         # separately.  The current model treats the colony as one aggregate
         # standing larval biomass and self-harvests a continuous fraction.
+        if facility_id == "chicken-coop":
+            instance.setdefault("feed_mass", 0.0)
+
         if facility_id == "bsfl-reactor":
             if "larval_biomass" not in instance:
                 old_growing = float(instance.get("growing_larval_biomass", 0.0))
@@ -268,6 +290,13 @@ class Simulation:
     # ------------------------------------------------------------------
     # Public state
     # ------------------------------------------------------------------
+
+    def _public_player_state(self):
+        player = deepcopy(self.game_state["player"])
+        queue = player.get("task_queue", [])
+        player["current_task"] = deepcopy(queue[0]) if queue else None
+        player["queued_task_count"] = max(0, len(queue) - 1)
+        return player
 
     def state(self):
         """
@@ -338,7 +367,7 @@ class Simulation:
             "current_flows": deepcopy(self.game_state["current_flows"]),
             "map": deepcopy(self.game_state["map"]),
             "house": deepcopy(self.game_state["house"]),
-            "player": deepcopy(self.game_state["player"]),
+            "player": self._public_player_state(),
             "pending_events": deepcopy(self.game_state["pending_events"]),
             "last_full_tick_events": deepcopy(self.game_state["last_full_tick_events"]),
             "tile_states": deepcopy(self.game_state["tile_states"]),
@@ -480,7 +509,7 @@ class Simulation:
 
 
     # ------------------------------------------------------------------
-    # Facility content transfers
+    # Activity queue, physical transfers, and player movement
     # ------------------------------------------------------------------
 
     def _find_facility_instance(self, instance_id):
@@ -491,19 +520,27 @@ class Simulation:
         raise ValueError("Facility instance not found.")
 
     def _fill_spec(self, instance, resource_id):
-        """Return the supported destination field/capacity for a fill action."""
+        """Return destination state/capacity for a physical facility delivery."""
         facility_id = instance.get("facility_id")
         definition = self.facility_definitions.get(facility_id) or {}
         container = definition.get("container") or {}
         process = definition.get("process") or {}
 
-        if facility_id == "chicken-coop" and resource_id == "chicken":
-            return {
-                "field": "current_fill",
-                "capacity": float(container.get("capacity", 0.0)),
-                "unit": "bird",
-                "integer_only": True,
-            }
+        if facility_id == "chicken-coop":
+            if resource_id == "chicken":
+                return {
+                    "field": "current_fill",
+                    "capacity": float(container.get("capacity", 0.0)),
+                    "unit": "bird",
+                    "integer_only": True,
+                }
+            if resource_id == "feed":
+                return {
+                    "field": "feed_mass",
+                    "capacity": None,
+                    "unit": "lb",
+                    "integer_only": False,
+                }
 
         if facility_id == "bsfl-reactor":
             if resource_id == "bsfl_biomass":
@@ -533,102 +570,8 @@ class Simulation:
 
         raise ValueError("That material cannot be added to this facility.")
 
-    def _pending_fill_for_field(self, instance_id, field):
-        total = 0.0
-        for event in self.game_state.get("pending_events", []):
-            if (
-                event.get("type") == "facility_fill"
-                and event.get("instance_id") == instance_id
-                and event.get("target_field") == field
-            ):
-                total += float(event.get("amount", 0.0))
-        return total
-
-    def fill_facility(self, instance_id, resource_id, amount):
-        """Stage material/organisms for addition at the next full tick.
-
-        Inventory is reserved immediately, while the actual facility state change
-        is journaled in pending_events and applied after the current hour's full
-        processing pass. This prevents a sub-tick addition from being treated as
-        though it had been present for the entire preceding hour.
-        """
-        if not isinstance(instance_id, str) or not instance_id:
-            raise ValueError("A facility instance must be selected.")
-        if not isinstance(resource_id, str) or not resource_id:
-            raise ValueError("A material must be selected.")
-
-        try:
-            amount = float(amount)
-        except (TypeError, ValueError) as exc:
-            raise ValueError("Fill amount must be numeric.") from exc
-
-        if amount <= 0:
-            raise ValueError("Fill amount must be greater than zero.")
-
-        instance = self._find_facility_instance(instance_id)
-        spec = self._fill_spec(instance, resource_id)
-
-        if spec["integer_only"] and not amount.is_integer():
-            raise ValueError("Chickens must be added in whole birds.")
-
-        available = self._player_inventory_amount(resource_id)
-        if amount > available + 1e-9:
-            raise ValueError(
-                f"The Homesteader is not carrying enough "
-                f"{resource_id.replace('_', ' ')}. Available: {available:g}."
-            )
-
-        current = max(0.0, float(instance.get(spec["field"], 0.0)))
-        pending = self._pending_fill_for_field(instance_id, spec["field"])
-        capacity = max(0.0, float(spec["capacity"]))
-        remaining = max(0.0, capacity - current - pending)
-
-        if amount > remaining + 1e-9:
-            raise ValueError(
-                f"That exceeds the remaining capacity ({remaining:g} {spec['unit']})."
-            )
-
-        used = self._consume_player_inventory(resource_id, amount)
-        if used + 1e-9 < amount:
-            raise ValueError("Carried inventory changed before the transfer could be reserved.")
-
-        event = self._append_pending_event({
-            "type": "facility_fill",
-            "instance_id": instance_id,
-            "facility_id": instance.get("facility_id"),
-            "resource_id": resource_id,
-            "amount": amount,
-            "target_field": spec["field"],
-            "unit": spec["unit"],
-            "effective": "next_full_tick",
-        })
-        self.save()
-        return deepcopy(event)
-
-    def _apply_pending_facility_fills(self, events):
-        applied = []
-        for event in events:
-            if event.get("type") != "facility_fill":
-                continue
-
-            instance = self._find_facility_instance(event.get("instance_id"))
-            field = event.get("target_field")
-            amount = max(0.0, float(event.get("amount", 0.0)))
-            if not field or amount <= 0:
-                continue
-
-            instance[field] = max(0.0, float(instance.get(field, 0.0))) + amount
-            applied.append(deepcopy(event))
-
-        return applied
-
-    # ------------------------------------------------------------------
-    # Player inventory transfers
-    # ------------------------------------------------------------------
-
     def _player_inventory_amount(self, resource_id):
-        player = self.game_state["player"]
-        inventory = player.setdefault("inventory", {})
+        inventory = self.game_state["player"].setdefault("inventory", {})
         return float(inventory.get(resource_id, 0.0))
 
     def _add_player_inventory(self, resource_id, amount):
@@ -643,158 +586,27 @@ class Simulation:
         inventory = self.game_state["player"].setdefault("inventory", {})
         available = float(inventory.get(resource_id, 0.0))
         used = min(available, requested)
-        inventory[resource_id] = available - used
+        inventory[resource_id] = max(0.0, available - used)
         return used
 
-    def transfer_player_inventory(self, resource_id, amount, direction):
-        """Move a resource between household stores and the Homesteader.
-
-        This is an immediate inventory transfer. It does not run facility
-        processing and therefore does not require the hourly event journal.
-        Carry-capacity rules can be layered onto this method later without
-        changing the browser/API contract.
-        """
-        if not isinstance(resource_id, str) or not resource_id:
-            raise ValueError("A resource must be selected.")
-
-        try:
-            amount = float(amount)
-        except (TypeError, ValueError) as exc:
-            raise ValueError("Transfer amount must be numeric.") from exc
-
-        if amount <= 0:
-            raise ValueError("Transfer amount must be greater than zero.")
-
-        if resource_id == "chicken" and not amount.is_integer():
-            raise ValueError("Chickens must be transferred in whole birds.")
-
-        if direction == "to_player":
-            available = self._inventory_amount(resource_id)
-            if amount > available + 1e-9:
-                raise ValueError(
-                    f"Not enough {resource_id.replace('_', ' ')} in household inventory. "
-                    f"Available: {available:g}."
-                )
-            used = self._consume_inventory(resource_id, amount)
-            self._add_player_inventory(resource_id, used)
-
-        elif direction == "to_household":
-            available = self._player_inventory_amount(resource_id)
-            if amount > available + 1e-9:
-                raise ValueError(
-                    f"The Homesteader is not carrying enough "
-                    f"{resource_id.replace('_', ' ')}. Available: {available:g}."
-                )
-            used = self._consume_player_inventory(resource_id, amount)
-            self._add_inventory(resource_id, used)
-
-        else:
-            raise ValueError("Transfer direction must be to_player or to_household.")
-
-        event = self._append_pending_event({
-            "type": "inventory_transfer",
-            "resource_id": resource_id,
-            "amount": amount,
-            "direction": direction,
-            "effective": "immediate",
-        })
-        self.save()
-        return deepcopy(event)
-
-    def pickup_house_output(self, resource_id, amount):
-        """Move a recoverable household waste stream into player inventory."""
-        if resource_id not in {"kitchen_waste", "paper_waste"}:
-            raise ValueError("That resource is not available from a house pickup point.")
-
-        try:
-            amount = float(amount)
-        except (TypeError, ValueError) as exc:
-            raise ValueError("Pickup amount must be numeric.") from exc
-
-        if amount <= 0:
-            raise ValueError("Pickup amount must be greater than zero.")
-
-        outputs = self.game_state.setdefault("house", {}).setdefault("outputs", {})
-        available = float(outputs.get(resource_id, 0.0))
-        if amount > available + 1e-9:
-            raise ValueError(
-                f"Not enough {resource_id.replace('_', ' ')} at the house pickup point. "
-                f"Available: {available:g}."
-            )
-
-        outputs[resource_id] = max(0.0, available - amount)
-        self._add_player_inventory(resource_id, amount)
-        event = self._append_pending_event({
-            "type": "house_pickup",
-            "resource_id": resource_id,
-            "amount": amount,
-            "effective": "immediate",
-        })
-        self.save()
-        return deepcopy(event)
-
     def _house_storage_amount(self, resource_id):
-        storage = self.game_state.setdefault("house", {}).setdefault("storage", {})
+        storage = self.game_state["house"].setdefault("storage", {})
         return float(storage.get(resource_id, 0.0))
 
     def _add_house_storage(self, resource_id, amount):
         if amount <= 0:
             return
-        storage = self.game_state.setdefault("house", {}).setdefault("storage", {})
+        storage = self.game_state["house"].setdefault("storage", {})
         storage[resource_id] = float(storage.get(resource_id, 0.0)) + amount
 
     def _consume_house_storage(self, resource_id, requested):
         if requested <= 0:
             return 0.0
-        storage = self.game_state.setdefault("house", {}).setdefault("storage", {})
+        storage = self.game_state["house"].setdefault("storage", {})
         available = float(storage.get(resource_id, 0.0))
         used = min(available, requested)
-        storage[resource_id] = available - used
+        storage[resource_id] = max(0.0, available - used)
         return used
-
-    def transfer_house_storage(self, resource_id, amount, direction):
-        """Move portable material between House Storage and the Homesteader."""
-        if not isinstance(resource_id, str) or not resource_id:
-            raise ValueError("A resource must be selected.")
-        try:
-            amount = float(amount)
-        except (TypeError, ValueError) as exc:
-            raise ValueError("Transfer amount must be numeric.") from exc
-        if amount <= 0:
-            raise ValueError("Transfer amount must be greater than zero.")
-        if resource_id == "chicken" and not amount.is_integer():
-            raise ValueError("Chickens must be transferred in whole birds.")
-
-        if direction == "to_player":
-            available = self._house_storage_amount(resource_id)
-            if amount > available + 1e-9:
-                raise ValueError(
-                    f"Not enough {resource_id.replace('_', ' ')} in House Storage. "
-                    f"Available: {available:g}."
-                )
-            used = self._consume_house_storage(resource_id, amount)
-            self._add_player_inventory(resource_id, used)
-        elif direction == "to_house":
-            available = self._player_inventory_amount(resource_id)
-            if amount > available + 1e-9:
-                raise ValueError(
-                    f"The Homesteader is not carrying enough "
-                    f"{resource_id.replace('_', ' ')}. Available: {available:g}."
-                )
-            used = self._consume_player_inventory(resource_id, amount)
-            self._add_house_storage(resource_id, used)
-        else:
-            raise ValueError("Transfer direction must be to_player or to_house.")
-
-        event = self._append_pending_event({
-            "type": "house_storage_transfer",
-            "resource_id": resource_id,
-            "amount": amount,
-            "direction": direction,
-            "effective": "immediate",
-        })
-        self.save()
-        return deepcopy(event)
 
     def order_house_material(self, resource_id, amount):
         """Instantly deliver a zero-cost catalog item to House Storage."""
@@ -821,44 +633,27 @@ class Simulation:
         self.save()
         return deepcopy(event)
 
-    # ------------------------------------------------------------------
-    # Player movement and sub-ticks
-    # ------------------------------------------------------------------
+    def _next_task_id(self):
+        player = self.game_state.setdefault("player", {})
+        number = int(player.get("next_task_id", 1))
+        player["next_task_id"] = number + 1
+        return f"task-{number:04d}"
 
-    def start_walk(self, column, row):
-        if not isinstance(column, (int, float)) or not isinstance(row, (int, float)):
-            raise ValueError("Walk destination must use numeric map coordinates.")
-
-        map_state = self.game_state["map"]
-        max_column = int(map_state["width_tiles"]) - 1
-        max_row = int(map_state["height_tiles"]) - 1
-        target_column = float(column)
-        target_row = float(row)
-
-        if not (0 <= target_column <= max_column and 0 <= target_row <= max_row):
-            raise ValueError("Walk destination is outside the map.")
-
+    def _queue_task(self, task):
         player = self.game_state["player"]
-        position = player["position"]
-        dx = target_column - float(position.get("column", 0.0))
-        dy = target_row - float(position.get("row", 0.0))
-
-        if abs(dx) < 1e-9 and abs(dy) < 1e-9:
-            player["current_task"] = None
-            self.save()
-            return deepcopy(player)
-
-        direction = self._movement_direction(dx, dy)
-        player["current_task"] = {
-            "type": "walk",
-            "status": "active",
-            "target": {"column": target_column, "row": target_row},
-            "direction": direction,
-            "started_at": deepcopy(self.game_state["time"]),
+        queue = player.setdefault("task_queue", [])
+        queued = {
+            "task_id": self._next_task_id(),
+            "status": "queued",
+            "phase": "queued",
+            "queued_at": deepcopy(self.game_state["time"]),
+            "work_minutes_total": 0,
+            "work_minutes_remaining": 0,
+            **deepcopy(task),
         }
-        player["last_direction"] = direction
+        queue.append(queued)
         self.save()
-        return deepcopy(player)
+        return deepcopy(queued)
 
     @staticmethod
     def _movement_direction(dx, dy):
@@ -866,55 +661,402 @@ class Simulation:
             return "right" if dx >= 0 else "left"
         return "down" if dy >= 0 else "up"
 
-    def _advance_player_one_minute(self):
-        player = self.game_state["player"]
-        task = player.get("current_task")
-        if not task or task.get("type") != "walk":
-            return {"status": "idle", "completed": False}
+    def _point_blocked(self, column, row, ignore_instance_id=None):
+        map_state = self.game_state["map"]
+        if not (0 <= column < int(map_state["width_tiles"]) and 0 <= row < int(map_state["height_tiles"])):
+            return True
 
-        position = player["position"]
-        target = task.get("target") or {}
-        current_column = float(position.get("column", 0.0))
-        current_row = float(position.get("row", 0.0))
-        target_column = float(target.get("column", current_column))
-        target_row = float(target.get("row", current_row))
+        for instance in self.game_state["facilities"]:
+            if instance.get("instance_id") == ignore_instance_id:
+                continue
+            self._normalize_instance(instance)
+            if (
+                instance["column"] <= column < instance["column"] + instance["width"]
+                and instance["row"] <= row < instance["row"] + instance["height"]
+            ):
+                return True
 
-        dx = target_column - current_column
-        dy = target_row - current_row
-        distance_tiles = (dx * dx + dy * dy) ** 0.5
-        tile_size_ft = float(self.game_state["map"].get("tile_size_ft", 5))
-        tiles_per_minute = (
-            WALKING_SPEED_FT_PER_MINUTE / tile_size_ft
-            if tile_size_ft > 0
-            else distance_tiles
+        house = self.game_state.get("house") or {}
+        for point in (house.get("pickup_points") or {}).values():
+            pc = int(float(point.get("column", -1000)))
+            pr = int(float(point.get("row", -1000)))
+            if pc <= column < pc + 2 and pr <= row < pr + 2:
+                return True
+        point = house.get("storage_point") or {}
+        pc = int(float(point.get("column", -1000)))
+        pr = int(float(point.get("row", -1000)))
+        if pc <= column < pc + 3 and pr <= row < pr + 2:
+            return True
+        return False
+
+    def _nearest_adjacent_tile(self, instance):
+        self._normalize_instance(instance)
+        c0 = int(instance["column"])
+        r0 = int(instance["row"])
+        w = int(instance["width"])
+        h = int(instance["height"])
+        candidates = []
+        for column in range(c0, c0 + w):
+            candidates.extend([(column, r0 - 1), (column, r0 + h)])
+        for row in range(r0, r0 + h):
+            candidates.extend([(c0 - 1, row), (c0 + w, row)])
+
+        candidates = [
+            (column, row)
+            for column, row in candidates
+            if not self._point_blocked(column, row, instance.get("instance_id"))
+        ]
+        if not candidates:
+            raise ValueError("No accessible adjacent tile is available for this facility.")
+
+        position = self.game_state["player"]["position"]
+        pc = float(position.get("column", 0.0))
+        pr = float(position.get("row", 0.0))
+        column, row = min(candidates, key=lambda p: (p[0] - pc) ** 2 + (p[1] - pr) ** 2)
+        return {"column": float(column), "row": float(row)}
+
+    def _validate_map_target(self, column, row):
+        if not isinstance(column, (int, float)) or not isinstance(row, (int, float)):
+            raise ValueError("Destination must use numeric map coordinates.")
+        map_state = self.game_state["map"]
+        max_column = int(map_state["width_tiles"]) - 1
+        max_row = int(map_state["height_tiles"]) - 1
+        column = float(column)
+        row = float(row)
+        if not (0 <= column <= max_column and 0 <= row <= max_row):
+            raise ValueError("Destination is outside the map.")
+        return column, row
+
+    def queue_walk(self, column, row):
+        column, row = self._validate_map_target(column, row)
+        return self._queue_task({
+            "type": "walk",
+            "description": f"Walk to tile {int(column) + 1}, {int(row) + 1}",
+            "target": {"column": column, "row": row},
+        })
+
+    # Compatibility alias for older callers.
+    def start_walk(self, column, row):
+        self.queue_walk(column, row)
+        return deepcopy(self.game_state["player"])
+
+    def queue_house_pickup(self, resource_id, amount):
+        if resource_id not in {"kitchen_waste", "paper_waste"}:
+            raise ValueError("That resource is not available from a house pickup point.")
+        try:
+            amount = float(amount)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Pickup amount must be numeric.") from exc
+        if amount <= 0:
+            raise ValueError("Pickup amount must be greater than zero.")
+
+        outputs = self.game_state["house"].setdefault("outputs", {})
+        available = float(outputs.get(resource_id, 0.0))
+        if amount > available + 1e-9:
+            raise ValueError(f"Only {available:g} is available at that pickup point.")
+        outputs[resource_id] = max(0.0, available - amount)
+        point = self.game_state["house"]["pickup_points"][resource_id]
+        return self._queue_task({
+            "type": "house_pickup",
+            "description": f"Pick up {amount:g} {resource_id.replace('_', ' ')}",
+            "resource_id": resource_id,
+            "amount": amount,
+            "reserved_cargo": {"resource_id": resource_id, "amount": amount, "source": "house_output"},
+            "target": {"column": float(point["column"]), "row": float(point["row"])},
+            "work_minutes_total": 1,
+            "work_minutes_remaining": 1,
+        })
+
+    def pickup_house_output(self, resource_id, amount):
+        return self.queue_house_pickup(resource_id, amount)
+
+    def queue_house_storage_transfer(self, resource_id, amount, direction):
+        if not isinstance(resource_id, str) or not resource_id:
+            raise ValueError("A resource must be selected.")
+        try:
+            amount = float(amount)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Transfer amount must be numeric.") from exc
+        if amount <= 0:
+            raise ValueError("Transfer amount must be greater than zero.")
+        if resource_id == "chicken" and not amount.is_integer():
+            raise ValueError("Laying hens must be transferred in whole birds.")
+
+        if direction == "to_player":
+            available = self._house_storage_amount(resource_id)
+            if amount > available + 1e-9:
+                raise ValueError(f"Only {available:g} is available in House Storage.")
+            self._consume_house_storage(resource_id, amount)
+            source = "house_storage"
+            description = f"Pick up {amount:g} {resource_id.replace('_', ' ')} from House Storage"
+        elif direction == "to_house":
+            available = self._player_inventory_amount(resource_id)
+            if amount > available + 1e-9:
+                raise ValueError(f"The Homesteader is carrying only {available:g}.")
+            self._consume_player_inventory(resource_id, amount)
+            source = "player"
+            description = f"Drop off {amount:g} {resource_id.replace('_', ' ')} at House Storage"
+        else:
+            raise ValueError("Transfer direction must be to_player or to_house.")
+
+        point = self.game_state["house"]["storage_point"]
+        return self._queue_task({
+            "type": "house_storage_transfer",
+            "description": description,
+            "resource_id": resource_id,
+            "amount": amount,
+            "transfer_direction": direction,
+            "reserved_cargo": {"resource_id": resource_id, "amount": amount, "source": source},
+            "target": {"column": float(point["column"]), "row": float(point["row"])},
+            "work_minutes_total": 1,
+            "work_minutes_remaining": 1,
+        })
+
+    def transfer_house_storage(self, resource_id, amount, direction):
+        return self.queue_house_storage_transfer(resource_id, amount, direction)
+
+    def transfer_player_inventory(self, resource_id, amount, direction):
+        """Compatibility route: household transfers now use physical House Storage."""
+        mapped = "to_house" if direction == "to_household" else direction
+        return self.queue_house_storage_transfer(resource_id, amount, mapped)
+
+    def queue_facility_fill(self, instance_id, resource_id, amount):
+        if not isinstance(instance_id, str) or not instance_id:
+            raise ValueError("A facility instance must be selected.")
+        if not isinstance(resource_id, str) or not resource_id:
+            raise ValueError("A material must be selected.")
+        try:
+            amount = float(amount)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Fill amount must be numeric.") from exc
+        if amount <= 0:
+            raise ValueError("Fill amount must be greater than zero.")
+
+        instance = self._find_facility_instance(instance_id)
+        spec = self._fill_spec(instance, resource_id)
+        if spec["integer_only"] and not amount.is_integer():
+            raise ValueError("Laying hens must be added in whole birds.")
+
+        available = self._player_inventory_amount(resource_id)
+        if amount > available + 1e-9:
+            raise ValueError(f"The Homesteader is carrying only {available:g}.")
+
+        current = max(0.0, float(instance.get(spec["field"], 0.0)))
+        reserved = 0.0
+        for task in self.game_state["player"].get("task_queue", []):
+            if (
+                task.get("type") == "facility_fill"
+                and task.get("target_instance_id") == instance_id
+                and task.get("target_field") == spec["field"]
+            ):
+                reserved += float(task.get("amount", 0.0))
+        if spec["capacity"] is not None:
+            remaining = max(0.0, float(spec["capacity"]) - current - reserved)
+            if amount > remaining + 1e-9:
+                raise ValueError(f"That exceeds remaining capacity ({remaining:g} {spec['unit']}).")
+
+        self._consume_player_inventory(resource_id, amount)
+        definition = self.facility_definitions.get(instance["facility_id"]) or {}
+        return self._queue_task({
+            "type": "facility_fill",
+            "description": f"Deliver {amount:g} {resource_id.replace('_', ' ')} to {definition.get('name', instance['facility_id'])}",
+            "target_instance_id": instance_id,
+            "resource_id": resource_id,
+            "amount": amount,
+            "target_field": spec["field"],
+            "unit": spec["unit"],
+            "reserved_cargo": {"resource_id": resource_id, "amount": amount, "source": "player"},
+            "work_minutes_total": 1,
+            "work_minutes_remaining": 1,
+        })
+
+    def fill_facility(self, instance_id, resource_id, amount):
+        return self.queue_facility_fill(instance_id, resource_id, amount)
+
+    def queue_service_facility(self, instance_id):
+        instance = self._find_facility_instance(instance_id)
+        accrued = max(0.0, float(instance.get("accrued_labor_requirement", 0.0)))
+        already_reserved = sum(
+            max(0.0, float(task.get("service_hours_remaining", 0.0)))
+            for task in self.game_state["player"].get("task_queue", [])
+            if task.get("type") == "service_facility"
+            and task.get("target_instance_id") == instance_id
         )
+        labor_hours = max(0.0, accrued - already_reserved)
+        if labor_hours <= 1e-9:
+            raise ValueError("This facility has no unassigned service labor requirement.")
+        minutes = max(1, int(math.ceil(labor_hours * MINUTES_PER_HOUR - 1e-12)))
+        definition = self.facility_definitions.get(instance["facility_id"]) or {}
+        return self._queue_task({
+            "type": "service_facility",
+            "description": f"Service {definition.get('name', instance['facility_id'])}",
+            "target_instance_id": instance_id,
+            "service_hours_reserved": labor_hours,
+            "service_hours_remaining": labor_hours,
+            "work_minutes_total": minutes,
+            "work_minutes_remaining": minutes,
+        })
 
-        direction = self._movement_direction(dx, dy) if distance_tiles > 0 else player.get("last_direction", "down")
-        task["direction"] = direction
-        player["last_direction"] = direction
+    def _refund_task_reservation(self, task):
+        cargo = task.get("reserved_cargo") or {}
+        resource_id = cargo.get("resource_id")
+        amount = max(0.0, float(cargo.get("amount", 0.0)))
+        source = cargo.get("source")
+        if not resource_id or amount <= 0:
+            return
+        if source == "house_output":
+            outputs = self.game_state["house"].setdefault("outputs", {})
+            outputs[resource_id] = float(outputs.get(resource_id, 0.0)) + amount
+        elif source == "house_storage":
+            self._add_house_storage(resource_id, amount)
+        elif source == "player":
+            self._add_player_inventory(resource_id, amount)
 
-        if distance_tiles <= tiles_per_minute or distance_tiles <= 1e-9:
-            position["column"] = target_column
-            position["row"] = target_row
-            player["current_task"] = None
+    def cancel_task(self, task_id):
+        queue = self.game_state["player"].setdefault("task_queue", [])
+        for index, task in enumerate(queue):
+            if task.get("task_id") == task_id:
+                removed = queue.pop(index)
+                self._refund_task_reservation(removed)
+                self._append_pending_event({
+                    "type": "task_cancelled",
+                    "task_id": task_id,
+                    "task_type": removed.get("type"),
+                })
+                self.save()
+                return deepcopy(removed)
+        raise ValueError("Task not found.")
+
+    def _initialize_task(self, task):
+        if task.get("phase") != "queued":
+            return
+        if task.get("target_instance_id"):
+            instance = self._find_facility_instance(task["target_instance_id"])
+            task["target"] = self._nearest_adjacent_tile(instance)
+        target = task.get("target")
+        if target is None:
+            task["phase"] = "working"
+            task["status"] = "active"
+            return
+        position = self.game_state["player"]["position"]
+        dx = float(target["column"]) - float(position.get("column", 0.0))
+        dy = float(target["row"]) - float(position.get("row", 0.0))
+        if (dx * dx + dy * dy) ** 0.5 <= 1e-9:
+            if task.get("type") == "walk" or int(task.get("work_minutes_remaining", 0)) <= 0:
+                task["phase"] = "complete"
+            else:
+                task["phase"] = "working"
+        else:
+            task["phase"] = "travel"
+        task["status"] = "active"
+        task["started_at"] = deepcopy(self.game_state["time"])
+
+    def _complete_task_effect(self, task):
+        task_type = task.get("type")
+        if task_type == "house_pickup":
+            self._add_player_inventory(task["resource_id"], float(task["amount"]))
+        elif task_type == "house_storage_transfer":
+            if task.get("transfer_direction") == "to_player":
+                self._add_player_inventory(task["resource_id"], float(task["amount"]))
+            else:
+                self._add_house_storage(task["resource_id"], float(task["amount"]))
+        elif task_type == "facility_fill":
+            instance = self._find_facility_instance(task["target_instance_id"])
+            field = task["target_field"]
+            instance[field] = max(0.0, float(instance.get(field, 0.0))) + float(task["amount"])
+
+        self._append_pending_event({
+            "type": "task_completed",
+            "task_id": task.get("task_id"),
+            "task_type": task_type,
+            "description": task.get("description"),
+        })
+
+    def _advance_task_one_minute(self):
+        player = self.game_state["player"]
+        queue = player.setdefault("task_queue", [])
+        if not queue:
+            return {"status": "idle", "completed": False, "phase": "idle"}
+
+        task = queue[0]
+        self._initialize_task(task)
+
+        if task.get("phase") == "complete":
+            self._complete_task_effect(task)
+            finished = queue.pop(0)
+            return {"status": "completed", "completed": True, "phase": "complete", "task": deepcopy(finished)}
+
+        if task.get("phase") == "travel":
+            position = player["position"]
+            target = task.get("target") or {}
+            current_column = float(position.get("column", 0.0))
+            current_row = float(position.get("row", 0.0))
+            target_column = float(target.get("column", current_column))
+            target_row = float(target.get("row", current_row))
+            dx = target_column - current_column
+            dy = target_row - current_row
+            distance_tiles = (dx * dx + dy * dy) ** 0.5
+            tile_size_ft = float(self.game_state["map"].get("tile_size_ft", 5))
+            tiles_per_minute = WALKING_SPEED_FT_PER_MINUTE / tile_size_ft if tile_size_ft > 0 else distance_tiles
+            direction = self._movement_direction(dx, dy) if distance_tiles > 0 else player.get("last_direction", "down")
+            task["direction"] = direction
+            player["last_direction"] = direction
+
+            if distance_tiles <= tiles_per_minute or distance_tiles <= 1e-9:
+                position["column"] = target_column
+                position["row"] = target_row
+                if task.get("type") == "walk" or int(task.get("work_minutes_remaining", 0)) <= 0:
+                    self._complete_task_effect(task)
+                    finished = queue.pop(0)
+                    return {
+                        "status": "completed", "completed": True, "phase": "complete",
+                        "type": task.get("type"), "target": deepcopy(target), "direction": direction,
+                        "task": deepcopy(finished),
+                    }
+                task["phase"] = "working"
+                return {
+                    "status": "arrived", "completed": False, "phase": "working",
+                    "type": task.get("type"), "target": deepcopy(target), "direction": direction,
+                    "task": deepcopy(task),
+                }
+
+            fraction = tiles_per_minute / distance_tiles
+            position["column"] = current_column + dx * fraction
+            position["row"] = current_row + dy * fraction
             return {
-                "status": "completed",
-                "completed": True,
-                "type": "walk",
-                "target": deepcopy(target),
-                "direction": direction,
+                "status": "walking", "completed": False, "phase": "travel",
+                "type": task.get("type"), "target": deepcopy(target), "direction": direction,
+                "task": deepcopy(task),
             }
 
-        fraction = tiles_per_minute / distance_tiles
-        position["column"] = current_column + dx * fraction
-        position["row"] = current_row + dy * fraction
-        return {
-            "status": "walking",
-            "completed": False,
-            "type": "walk",
-            "target": deepcopy(target),
-            "direction": direction,
-        }
+        if task.get("phase") == "working":
+            remaining = max(0, int(task.get("work_minutes_remaining", 0)))
+            if remaining > 0:
+                if task.get("type") == "service_facility":
+                    instance = self._find_facility_instance(task["target_instance_id"])
+                    service_remaining = max(0.0, float(task.get("service_hours_remaining", 0.0)))
+                    worked_hours = min(1.0 / MINUTES_PER_HOUR, service_remaining)
+                    instance["accrued_labor_requirement"] = max(
+                        0.0,
+                        float(instance.get("accrued_labor_requirement", 0.0)) - worked_hours,
+                    )
+                    task["service_hours_remaining"] = max(0.0, service_remaining - worked_hours)
+                task["work_minutes_remaining"] = remaining - 1
+
+            if int(task.get("work_minutes_remaining", 0)) <= 0:
+                self._complete_task_effect(task)
+                finished = queue.pop(0)
+                return {
+                    "status": "completed", "completed": True, "phase": "complete",
+                    "type": task.get("type"), "task": deepcopy(finished),
+                }
+
+            return {
+                "status": "working", "completed": False, "phase": "working",
+                "type": task.get("type"), "task": deepcopy(task),
+            }
+
+        return {"status": "idle", "completed": False, "phase": task.get("phase", "queued"), "task": deepcopy(task)}
 
     def _append_pending_event(self, event):
         stamped = {
@@ -925,41 +1067,34 @@ class Simulation:
         return stamped
 
     def _advance_one_minute(self):
-        """Advance one simulated minute without building a full public state."""
+        """Advance one simulated minute; one queued Homesteader task may progress."""
         started_at = deepcopy(self.game_state["time"])
-        movement = self._advance_player_one_minute()
+        activity = self._advance_task_one_minute()
 
         time_state = self.game_state["time"]
         time_state["minute"] = int(time_state.get("minute", 0)) + 1
         full_tick_due = time_state["minute"] >= MINUTES_PER_HOUR
 
-        if movement.get("completed"):
-            self._append_pending_event({
-                "type": "walk_completed",
-                "target": deepcopy(movement.get("target", {})),
-            })
-
         full_tick_result = None
         if full_tick_due:
             time_state["minute"] = 0
             full_tick_result = self.advance_hour()
-        elif movement.get("completed"):
+        else:
             self.save()
 
         return {
             "subtick_started_at": started_at,
-            "movement": movement,
+            "movement": activity,
+            "activity": activity,
             "full_tick": full_tick_result is not None,
             "full_tick_result": full_tick_result,
         }
 
     def advance_subtick(self):
-        """Advance one simulated minute and return the resulting public state."""
         result = self._advance_one_minute()
         return {**result, "state": self.state()}
 
     def advance_minutes(self, minutes):
-        """Advance an integer number of simulated minutes in one request."""
         if isinstance(minutes, bool):
             raise ValueError("Minutes must be a positive integer.")
         try:
@@ -972,13 +1107,12 @@ class Simulation:
             raise ValueError("A single advance is limited to seven simulated days.")
 
         first_started_at = deepcopy(self.game_state["time"])
-        last_movement = {"status": "idle", "completed": False}
+        last_activity = {"status": "idle", "completed": False, "phase": "idle"}
         full_ticks = 0
         last_full_tick_result = None
-
         for _ in range(minutes):
             result = self._advance_one_minute()
-            last_movement = result["movement"]
+            last_activity = result["activity"]
             if result["full_tick"]:
                 full_ticks += 1
                 last_full_tick_result = result["full_tick_result"]
@@ -986,7 +1120,8 @@ class Simulation:
         return {
             "advance_started_at": first_started_at,
             "minutes_advanced": minutes,
-            "movement": last_movement,
+            "movement": last_activity,
+            "activity": last_activity,
             "full_tick": full_ticks > 0,
             "full_ticks": full_ticks,
             "full_tick_result": last_full_tick_result,
@@ -1037,9 +1172,9 @@ class Simulation:
 
         self._finalize_external_utility_flows()
 
-        # Sub-tick facility fills become effective only after the just-finished
-        # hour has been processed. This prevents retroactive full-hour output.
-        applied_fills = self._apply_pending_facility_fills(pending_events)
+        # Pending events are now an audit journal. Physical transfers are
+        # executed by the Homesteader activity queue at minute resolution.
+        applied_fills = []
         self.game_state["last_full_tick_events"] = pending_events
         self.game_state["pending_events"] = []
 
@@ -1297,82 +1432,62 @@ class Simulation:
         if capacity > 0:
             bird_count = min(bird_count, capacity)
             instance["current_fill"] = bird_count
+        instance.setdefault("feed_mass", 0.0)
 
         if bird_count <= 0:
             return {
-                "status": "idle",
-                "reason": "no chickens",
-                "occupancy": 0,
-                "consumed": {},
-                "produced": {},
+                "status": "idle", "reason": "no chickens", "occupancy": 0,
+                "feed_mass": round(float(instance.get("feed_mass", 0.0)), 6),
+                "consumed": {}, "produced": {},
             }
 
-        requested = {}
-        for resource_id, rule in definition.get("inputs", {}).items():
-            per_unit_daily = rule.get("rate_per_container_unit_per_day")
-            if per_unit_daily is not None:
-                requested[resource_id] = (
-                    float(per_unit_daily) * bird_count / HOURS_PER_DAY
-                )
+        inputs = definition.get("inputs", {})
+        feed_daily = float((inputs.get("feed") or {}).get("rate_per_container_unit_per_day", 0.0))
+        water_daily = float((inputs.get("water") or {}).get("rate_per_container_unit_per_day", 0.0))
+        requested_feed = feed_daily * bird_count / HOURS_PER_DAY
+        requested_water = water_daily * bird_count / HOURS_PER_DAY
 
-        # All required inputs share one utilization factor.  If feed is at
-        # 50% of requirement, for example, all biological outputs run at 50%.
-        utilization = 1.0
-        for resource_id, amount in requested.items():
-            if amount > 0:
-                utilization = min(
-                    utilization,
-                    self._inventory_amount(resource_id) / amount,
-                )
-
+        available_feed = max(0.0, float(instance.get("feed_mass", 0.0)))
+        utilization = 1.0 if requested_feed <= 0 else min(1.0, available_feed / requested_feed)
         utilization = max(0.0, min(1.0, utilization))
 
+        used_feed = min(available_feed, requested_feed * utilization)
+        instance["feed_mass"] = max(0.0, available_feed - used_feed)
+        used_water = requested_water * utilization
+        # Water delivery is still abstracted as municipal supply until the
+        # household water-routing system is implemented.
+        self.game_state["current_flows"]["municipal_water_this_tick_gal"] = (
+            float(self.game_state["current_flows"].get("municipal_water_this_tick_gal", 0.0))
+            + used_water
+        )
+
         consumed = {}
-        for resource_id, amount in requested.items():
-            used = self._consume_inventory(resource_id, amount * utilization)
-            if used > 0:
-                consumed[resource_id] = round(used, 6)
+        if used_feed > 0:
+            consumed["feed"] = round(used_feed, 6)
+        if used_water > 0:
+            consumed["water"] = round(used_water, 6)
 
         produced = {}
         for resource_id, rule in definition.get("outputs", {}).items():
             per_unit_daily = rule.get("rate_per_container_unit_per_day")
             if per_unit_daily is None:
                 continue
-
-            amount = (
-                float(per_unit_daily)
-                * bird_count
-                / HOURS_PER_DAY
-                * utilization
-            )
+            amount = float(per_unit_daily) * bird_count / HOURS_PER_DAY * utilization
             self._add_inventory(resource_id, amount)
             if amount > 0:
                 produced[resource_id] = round(amount, 6)
 
-        reason = None
-        if utilization < 1.0:
-            limiting = [
-                resource_id
-                for resource_id, amount in requested.items()
-                if amount > 0 and self._inventory_amount(resource_id) <= 1e-12
-            ]
-            reason = (
-                f"limited by {', '.join(limiting)}"
-                if limiting
-                else "limited by inputs"
-            )
-
+        reason = None if utilization >= 1.0 else "limited by feed"
         return {
             "status": "operating" if utilization > 0 else "idle",
             "occupancy": bird_count,
             "capacity": capacity,
+            "feed_mass": round(float(instance.get("feed_mass", 0.0)), 6),
             "utilization_pct": round(utilization * 100, 1),
             "consumed": consumed,
             "produced": produced,
             "reason": reason,
-            "accrued_labor_requirement": round(
-                instance["accrued_labor_requirement"], 6
-            ),
+            "accrued_labor_requirement": round(instance["accrued_labor_requirement"], 6),
         }
 
     def _process_rain_barrel(self, instance, definition):

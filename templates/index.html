@@ -37,7 +37,7 @@
         <div class="interaction-actions" aria-label="Selection actions">
           <button id="walk-here-button" class="interaction-button primary" type="button">Walk Here</button>
           <button class="interaction-button" type="button" disabled title="Not implemented in this push">Details</button>
-          <button class="interaction-button" type="button" disabled title="Not implemented in this push">Maintenance</button>
+          <button id="service-facility-button" class="interaction-button" type="button" title="Queue service work for this facility">Service Facility</button>
           <button id="manage-contents-button" class="interaction-button" type="button" title="Manage facility contents">Manage Contents</button>
         </div>
         <div id="object-inspector-content" class="object-inspector-content"></div>
@@ -110,7 +110,11 @@
               <ul id="resource-list" aria-live="polite"></ul>
             </section>
             <section id="operations-panel" class="info-panel" hidden>
-              <h3>Operations</h3>
+              <h3>Homesteader Activity</h3>
+              <div id="current-task-card" class="current-task-card" aria-live="polite">No game loaded.</div>
+              <h4>Queue</h4>
+              <div id="task-queue-list" class="task-queue-list" aria-live="polite"></div>
+              <h4>Facility Operations</h4>
               <ul id="facility-status-list" aria-live="polite"><li>No game loaded.</li></ul>
             </section>
           </div>

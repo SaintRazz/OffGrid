@@ -1,5 +1,5 @@
 {
-  "schema_version": "0.5",
+  "schema_version": "0.6",
   "time": {
     "day": 1,
     "hour": 8,
@@ -42,9 +42,10 @@
       "column": 0.0,
       "row": 41.0
     },
-    "current_task": null,
     "last_direction": "down",
-    "inventory": {}
+    "inventory": {},
+    "task_queue": [],
+    "next_task_id": 1
   },
   "pending_events": [],
   "last_full_tick_events": [],
@@ -77,6 +78,10 @@
       "column": 20.0,
       "row": 40.0
     },
-    "storage": {}
+    "storage": {
+      "feed": 0.0,
+      "chicken": 0.0,
+      "bsfl_biomass": 0.0
+    }
   }
 }

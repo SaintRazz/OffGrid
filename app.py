@@ -219,8 +219,8 @@ def transfer_player_inventory():
         return jsonify({"error": str(exc)}), 400
 
     return jsonify({
-        "status": "transferred",
-        "event": event,
+        "status": "queued",
+        "task": event,
         "state": state,
     })
 
@@ -240,8 +240,8 @@ def pickup_house_output():
         return jsonify({"error": str(exc)}), 400
 
     return jsonify({
-        "status": "picked_up",
-        "event": event,
+        "status": "queued",
+        "task": event,
         "state": state,
     })
 
@@ -262,8 +262,8 @@ def transfer_house_storage():
         return jsonify({"error": str(exc)}), 400
 
     return jsonify({
-        "status": "transferred",
-        "event": event,
+        "status": "queued",
+        "task": event,
         "state": state,
     })
 
@@ -303,7 +303,7 @@ def walk_player():
         return jsonify({"error": str(exc)}), 400
 
     return jsonify({
-        "status": "walking" if player.get("current_task") else "already_there",
+        "status": "queued",
         "player": player,
         "state": state,
     })
@@ -344,8 +344,40 @@ def fill_facility(instance_id):
         return jsonify({"error": str(exc)}), 400
 
     return jsonify({
-        "status": "staged",
-        "event": event,
+        "status": "queued",
+        "task": event,
+        "state": state,
+    })
+
+
+@app.post("/api/facilities/<instance_id>/service")
+def service_facility(instance_id):
+    try:
+        with SIMULATION_LOCK:
+            task = get_simulation().queue_service_facility(instance_id)
+            state = get_simulation().state()
+    except (RuntimeError, OSError, TypeError, ValueError, KeyError) as exc:
+        return jsonify({"error": str(exc)}), 400
+
+    return jsonify({
+        "status": "queued",
+        "task": task,
+        "state": state,
+    })
+
+
+@app.post("/api/tasks/<task_id>/cancel")
+def cancel_task(task_id):
+    try:
+        with SIMULATION_LOCK:
+            task = get_simulation().cancel_task(task_id)
+            state = get_simulation().state()
+    except (RuntimeError, OSError, TypeError, ValueError, KeyError) as exc:
+        return jsonify({"error": str(exc)}), 400
+
+    return jsonify({
+        "status": "cancelled",
+        "task": task,
         "state": state,
     })
 
