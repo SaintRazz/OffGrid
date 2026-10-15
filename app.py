@@ -188,6 +188,21 @@ def advance_subtick():
     return jsonify(result)
 
 
+
+
+@app.post("/api/advance")
+def advance_minutes():
+    payload = request.get_json(silent=True) or {}
+
+    try:
+        with SIMULATION_LOCK:
+            result = get_simulation().advance_minutes(payload.get("minutes"))
+    except (RuntimeError, OSError, TypeError, ValueError, KeyError) as exc:
+        return jsonify({"error": str(exc)}), 400
+
+    return jsonify(result)
+
+
 @app.post("/api/player/inventory/transfer")
 def transfer_player_inventory():
     payload = request.get_json(silent=True) or {}
@@ -226,6 +241,49 @@ def pickup_house_output():
 
     return jsonify({
         "status": "picked_up",
+        "event": event,
+        "state": state,
+    })
+
+
+@app.post("/api/house/storage/transfer")
+def transfer_house_storage():
+    payload = request.get_json(silent=True) or {}
+
+    try:
+        with SIMULATION_LOCK:
+            event = get_simulation().transfer_house_storage(
+                resource_id=payload.get("resource_id"),
+                amount=payload.get("amount"),
+                direction=payload.get("direction"),
+            )
+            state = get_simulation().state()
+    except (RuntimeError, OSError, TypeError, ValueError, KeyError) as exc:
+        return jsonify({"error": str(exc)}), 400
+
+    return jsonify({
+        "status": "transferred",
+        "event": event,
+        "state": state,
+    })
+
+
+@app.post("/api/orders")
+def order_material():
+    payload = request.get_json(silent=True) or {}
+
+    try:
+        with SIMULATION_LOCK:
+            event = get_simulation().order_house_material(
+                resource_id=payload.get("resource_id"),
+                amount=payload.get("amount"),
+            )
+            state = get_simulation().state()
+    except (RuntimeError, OSError, TypeError, ValueError, KeyError) as exc:
+        return jsonify({"error": str(exc)}), 400
+
+    return jsonify({
+        "status": "delivered",
         "event": event,
         "state": state,
     })

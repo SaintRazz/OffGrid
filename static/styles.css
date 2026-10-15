@@ -1179,3 +1179,118 @@ body {
   padding-top: 0.7rem;
   border-top: 1px solid rgba(42, 47, 42, 0.25);
 }
+
+/* ============================================================
+   Speed controls / ordering / House Storage push
+   ============================================================ */
+
+.runtime-speed-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.runtime-speed-control select,
+.topbar-button {
+  min-height: 30px;
+  border: 1px solid var(--panel-border);
+  border-radius: 2px;
+  background: #f6f5ec;
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.72rem;
+}
+
+.runtime-speed-control select {
+  padding: 0.2rem 0.3rem;
+}
+
+.topbar-button {
+  padding: 0.25rem 0.5rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.topbar-button:hover:not(:disabled) {
+  background: #e3ead3;
+}
+
+.topbar-button:disabled {
+  opacity: 0.5;
+  cursor: wait;
+}
+
+.house-storage {
+  position: relative;
+  z-index: 13;
+  align-self: end;
+  justify-self: stretch;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  grid-template-rows: auto auto;
+  gap: 0.08rem 0.22rem;
+  min-width: 0;
+  min-height: 0;
+  margin: 7%;
+  padding: 0.18rem 0.22rem;
+  border: 2px solid #494339;
+  border-radius: 2px;
+  background: #d7d3bd;
+  color: #302d28;
+  font: inherit;
+  font-size: clamp(0.34rem, 0.55vw, 0.56rem);
+  line-height: 1.05;
+  text-align: left;
+  cursor: pointer;
+  box-shadow: 1px 1px 0 rgba(30,28,24,0.32);
+}
+
+.house-storage .pickup-icon {
+  grid-row: 1 / span 2;
+  align-self: center;
+  font-size: 1.15em;
+}
+
+.house-storage strong {
+  font-size: 0.95em;
+}
+
+.house-storage:hover,
+.house-storage:focus-visible {
+  outline: 2px solid #567344;
+  outline-offset: 1px;
+}
+
+.storage-transfer-controls {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 0.4rem;
+  align-items: end;
+}
+
+.storage-transfer-controls input {
+  width: 100%;
+  min-width: 0;
+  padding: 0.42rem;
+  border: 1px solid var(--panel-border);
+  background: #fffef7;
+  color: var(--ink);
+  font: inherit;
+}
+
+.order-shortcut {
+  width: 100%;
+  margin-top: 0.75rem;
+}
+
+@media (max-width: 760px) {
+  .runtime-status {
+    flex-wrap: wrap;
+  }
+
+  .storage-transfer-controls {
+    grid-template-columns: 1fr;
+  }
+}

@@ -9,6 +9,21 @@ MINUTES_PER_HOUR = 60
 HOURS_PER_YEAR = 365 * HOURS_PER_DAY
 WALKING_SPEED_FT_PER_MINUTE = 264.0
 
+ORDER_CATALOG = {
+    "chicken": {
+        "resource_id": "chicken",
+        "name": "Laying hen",
+        "unit": "bird",
+        "integer_only": True,
+    },
+    "bsfl_biomass": {
+        "resource_id": "bsfl_biomass",
+        "name": "Live black soldier fly larvae",
+        "unit": "lb",
+        "integer_only": False,
+    },
+}
+
 
 class Simulation:
     """
@@ -137,6 +152,10 @@ class Simulation:
         outputs = house.setdefault("outputs", {})
         outputs.setdefault("kitchen_waste", 0.0)
         outputs.setdefault("paper_waste", 0.0)
+        storage_point = house.setdefault("storage_point", {})
+        storage_point.setdefault("column", 20.0)
+        storage_point.setdefault("row", 40.0)
+        house.setdefault("storage", {})
 
         player = self.game_state.setdefault("player", {})
         player.setdefault("name", "Homesteader")
@@ -327,6 +346,7 @@ class Simulation:
                 list(self.facility_definitions.values())
             ),
             "resource_definitions": deepcopy(self.resource_definitions),
+            "order_catalog": deepcopy(ORDER_CATALOG),
             "instances": deepcopy(self.game_state["facilities"]),
         }
 
@@ -360,6 +380,33 @@ class Simulation:
             or row + height > map_height
         ):
             raise ValueError("Facility footprint is outside the map.")
+
+        house = self.game_state.get("house") or {}
+        reserved_house_zones = []
+        for point in (house.get("pickup_points") or {}).values():
+            reserved_house_zones.append((
+                int(float(point.get("column", -1000))),
+                int(float(point.get("row", -1000))),
+                2,
+                2,
+            ))
+        storage_point = house.get("storage_point") or {}
+        if storage_point:
+            reserved_house_zones.append((
+                int(float(storage_point.get("column", -1000))),
+                int(float(storage_point.get("row", -1000))),
+                3,
+                2,
+            ))
+
+        for zone_column, zone_row, zone_width, zone_height in reserved_house_zones:
+            if not (
+                column + width <= zone_column
+                or zone_column + zone_width <= column
+                or row + height <= zone_row
+                or zone_row + zone_height <= row
+            ):
+                raise ValueError("Facility footprint overlaps a household pickup or storage point.")
 
         for placed in self.game_state["facilities"]:
             self._normalize_instance(placed)
@@ -686,6 +733,94 @@ class Simulation:
         self.save()
         return deepcopy(event)
 
+    def _house_storage_amount(self, resource_id):
+        storage = self.game_state.setdefault("house", {}).setdefault("storage", {})
+        return float(storage.get(resource_id, 0.0))
+
+    def _add_house_storage(self, resource_id, amount):
+        if amount <= 0:
+            return
+        storage = self.game_state.setdefault("house", {}).setdefault("storage", {})
+        storage[resource_id] = float(storage.get(resource_id, 0.0)) + amount
+
+    def _consume_house_storage(self, resource_id, requested):
+        if requested <= 0:
+            return 0.0
+        storage = self.game_state.setdefault("house", {}).setdefault("storage", {})
+        available = float(storage.get(resource_id, 0.0))
+        used = min(available, requested)
+        storage[resource_id] = available - used
+        return used
+
+    def transfer_house_storage(self, resource_id, amount, direction):
+        """Move portable material between House Storage and the Homesteader."""
+        if not isinstance(resource_id, str) or not resource_id:
+            raise ValueError("A resource must be selected.")
+        try:
+            amount = float(amount)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Transfer amount must be numeric.") from exc
+        if amount <= 0:
+            raise ValueError("Transfer amount must be greater than zero.")
+        if resource_id == "chicken" and not amount.is_integer():
+            raise ValueError("Chickens must be transferred in whole birds.")
+
+        if direction == "to_player":
+            available = self._house_storage_amount(resource_id)
+            if amount > available + 1e-9:
+                raise ValueError(
+                    f"Not enough {resource_id.replace('_', ' ')} in House Storage. "
+                    f"Available: {available:g}."
+                )
+            used = self._consume_house_storage(resource_id, amount)
+            self._add_player_inventory(resource_id, used)
+        elif direction == "to_house":
+            available = self._player_inventory_amount(resource_id)
+            if amount > available + 1e-9:
+                raise ValueError(
+                    f"The Homesteader is not carrying enough "
+                    f"{resource_id.replace('_', ' ')}. Available: {available:g}."
+                )
+            used = self._consume_player_inventory(resource_id, amount)
+            self._add_house_storage(resource_id, used)
+        else:
+            raise ValueError("Transfer direction must be to_player or to_house.")
+
+        event = self._append_pending_event({
+            "type": "house_storage_transfer",
+            "resource_id": resource_id,
+            "amount": amount,
+            "direction": direction,
+            "effective": "immediate",
+        })
+        self.save()
+        return deepcopy(event)
+
+    def order_house_material(self, resource_id, amount):
+        """Instantly deliver a zero-cost catalog item to House Storage."""
+        spec = ORDER_CATALOG.get(resource_id)
+        if spec is None:
+            raise ValueError("That item is not available to order.")
+        try:
+            amount = float(amount)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Order amount must be numeric.") from exc
+        if amount <= 0:
+            raise ValueError("Order amount must be greater than zero.")
+        if spec.get("integer_only") and not amount.is_integer():
+            raise ValueError(f"{spec['name']} must be ordered in whole units.")
+
+        self._add_house_storage(resource_id, amount)
+        event = self._append_pending_event({
+            "type": "house_delivery",
+            "resource_id": resource_id,
+            "amount": amount,
+            "unit": spec.get("unit"),
+            "effective": "immediate",
+        })
+        self.save()
+        return deepcopy(event)
+
     # ------------------------------------------------------------------
     # Player movement and sub-ticks
     # ------------------------------------------------------------------
@@ -789,13 +924,8 @@ class Simulation:
         self.game_state["pending_events"].append(stamped)
         return stamped
 
-    def advance_subtick(self):
-        """Advance one simulated minute.
-
-        Player/task state is updated every sub-tick. Facility and household
-        processing remains hourly and runs only when the minute counter wraps
-        from 59 to 00.
-        """
+    def _advance_one_minute(self):
+        """Advance one simulated minute without building a full public state."""
         started_at = deepcopy(self.game_state["time"])
         movement = self._advance_player_one_minute()
 
@@ -814,8 +944,6 @@ class Simulation:
             time_state["minute"] = 0
             full_tick_result = self.advance_hour()
         elif movement.get("completed"):
-            # Important player events are persisted immediately even though
-            # the expensive world simulation waits for the hour boundary.
             self.save()
 
         return {
@@ -823,6 +951,45 @@ class Simulation:
             "movement": movement,
             "full_tick": full_tick_result is not None,
             "full_tick_result": full_tick_result,
+        }
+
+    def advance_subtick(self):
+        """Advance one simulated minute and return the resulting public state."""
+        result = self._advance_one_minute()
+        return {**result, "state": self.state()}
+
+    def advance_minutes(self, minutes):
+        """Advance an integer number of simulated minutes in one request."""
+        if isinstance(minutes, bool):
+            raise ValueError("Minutes must be a positive integer.")
+        try:
+            minutes = int(minutes)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Minutes must be a positive integer.") from exc
+        if minutes <= 0:
+            raise ValueError("Minutes must be greater than zero.")
+        if minutes > 10080:
+            raise ValueError("A single advance is limited to seven simulated days.")
+
+        first_started_at = deepcopy(self.game_state["time"])
+        last_movement = {"status": "idle", "completed": False}
+        full_ticks = 0
+        last_full_tick_result = None
+
+        for _ in range(minutes):
+            result = self._advance_one_minute()
+            last_movement = result["movement"]
+            if result["full_tick"]:
+                full_ticks += 1
+                last_full_tick_result = result["full_tick_result"]
+
+        return {
+            "advance_started_at": first_started_at,
+            "minutes_advanced": minutes,
+            "movement": last_movement,
+            "full_tick": full_ticks > 0,
+            "full_ticks": full_ticks,
+            "full_tick_result": last_full_tick_result,
             "state": self.state(),
         }
 

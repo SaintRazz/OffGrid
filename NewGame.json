@@ -1,5 +1,5 @@
 {
-  "schema_version": "0.4",
+  "schema_version": "0.5",
   "time": {
     "day": 1,
     "hour": 8,
@@ -72,6 +72,11 @@
     "outputs": {
       "kitchen_waste": 0.0,
       "paper_waste": 0.0
-    }
+    },
+    "storage_point": {
+      "column": 20.0,
+      "row": 40.0
+    },
+    "storage": {}
   }
 }
