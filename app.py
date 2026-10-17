@@ -350,6 +350,29 @@ def fill_facility(instance_id):
     })
 
 
+@app.post("/api/facilities/<instance_id>/collect")
+def collect_facility_output(instance_id):
+    payload = request.get_json(silent=True) or {}
+
+    try:
+        with SIMULATION_LOCK:
+            task = get_simulation().queue_facility_collection(
+                instance_id=instance_id,
+                resource_id=payload.get("resource_id"),
+                amount=payload.get("amount"),
+                source_field=payload.get("source_field"),
+            )
+            state = get_simulation().state()
+    except (RuntimeError, OSError, TypeError, ValueError, KeyError) as exc:
+        return jsonify({"error": str(exc)}), 400
+
+    return jsonify({
+        "status": "queued",
+        "task": task,
+        "state": state,
+    })
+
+
 @app.post("/api/facilities/<instance_id>/service")
 def service_facility(instance_id):
     try:

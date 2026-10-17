@@ -1,5 +1,5 @@
 {
-  "schema_version": "0.6",
+  "schema_version": "0.7",
   "time": {
     "day": 1,
     "hour": 8,
@@ -16,11 +16,11 @@
     "compost": 0.0,
     "insect_forage": 0.0,
     "live_grass": 0.0,
-    "plant_litter": 0.0,
-    "organic_residue": 0.0,
     "non_potable_water": 0.0,
     "chicken": 0.0,
-    "bsfl_biomass": 0.0
+    "bsfl_biomass": 0.0,
+    "carbonaceous_plant_waste": 0.0,
+    "active_compost": 0.0
   },
   "current_flows": {
     "electricity_generated_this_tick_kwh": 0.0,
@@ -61,7 +61,7 @@
         "column": 13.0,
         "row": 40.0
       },
-      "paper_waste": {
+      "carbonaceous_plant_waste": {
         "column": 16.0,
         "row": 40.0
       }
@@ -72,7 +72,7 @@
     },
     "outputs": {
       "kitchen_waste": 0.0,
-      "paper_waste": 0.0
+      "carbonaceous_plant_waste": 0.0
     },
     "storage_point": {
       "column": 20.0,

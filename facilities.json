@@ -103,23 +103,30 @@
       "height": 1,
       "market_price": 0,
       "inputs": {
-        "scat": {
-          "mode": "shared_feedstock"
-        },
         "kitchen_waste": {
-          "mode": "shared_feedstock"
+          "mode": "nitrogen_rich",
+          "carbon_demand_lb_per_lb": 0.5,
+          "unit": "lb"
         },
-        "plant_litter": {
-          "mode": "shared_feedstock"
+        "scat": {
+          "mode": "nitrogen_rich",
+          "carbon_demand_lb_per_lb": 1.5,
+          "unit": "lb"
+        },
+        "carbonaceous_plant_waste": {
+          "mode": "carbon_rich",
+          "carbon_credit_lb_per_lb": 1.0,
+          "unit": "lb"
+        },
+        "active_compost": {
+          "mode": "active_compost",
+          "unit": "lb",
+          "notes": "Pre-composted material bypasses fresh-feedstock balancing and enters the active-compost pool directly."
         }
       },
       "outputs": {
         "compost": {
-          "mass_yield_fraction": 0.4,
-          "unit": "lb"
-        },
-        "insect_forage": {
-          "rate_per_day_at_full_load": 0.02,
+          "mode": "mature_soil_amendment",
           "unit": "lb"
         }
       },
@@ -134,12 +141,18 @@
         "unit": "lb"
       },
       "process": {
-        "nominal_processing_time_days": 120,
-        "full_load_processing_rate_per_day": 4.17,
-        "full_load_processing_rate_unit": "lb",
-        "full_load_compost_output_per_day": 1.67,
-        "full_load_compost_output_unit": "lb",
-        "processing_scales_with_current_contents": true
+        "feedstock_conversion_rate_per_day": 0.1,
+        "active_maturation_rate_per_day": 0.04,
+        "feedstock_to_active_retention_fraction": 0.7,
+        "active_to_mature_retention_fraction": 0.65,
+        "process_states": [
+          "unbalanced_kitchen_waste",
+          "unbalanced_scat",
+          "available_carbon_material",
+          "feedstock_mass",
+          "active_compost_mass",
+          "mature_compost_mass"
+        ]
       },
       "construction": {
         "materials": {},
@@ -148,9 +161,13 @@
         "prerequisites": []
       },
       "notes": [
-        "Well-designed and maintained aerobic pile on bare soil.",
-        "Shade, moisture, aeration, and suitable feedstock balance are assumed.",
-        "Untracked mass loss represents water vapor, carbon dioxide, drainage, and other biological losses."
+        "All material pools share the 500 lb physical capacity.",
+        "Kitchen waste creates a nominal carbonaceous plant waste demand of 0.5 lb per lb; avian scat creates a demand of 1.5 lb per lb.",
+        "During servicing, balanced nitrogen-rich inputs and carbonaceous plant waste are mixed into generic feedstock.",
+        "Each hour mature conversion is processed first, then fresh feedstock conversion. Nominal daily conversion fractions are compounded to hourly rates.",
+        "Feedstock retains 70% of processed mass as active compost; active compost retains 65% as mature soil amendment. The remainder represents water loss, carbon dioxide, and other untracked biological losses.",
+        "Mature compost remains physically at the pile until the Homesteader collects it.",
+        "BSFL pre-compost or other active-compost material can be added directly to the active-compost pool and does not create a carbon-balancing requirement."
       ]
     },
     {
@@ -170,8 +187,8 @@
           "mode": "self_harvested_mature_larvae",
           "unit": "lb"
         },
-        "organic_residue": {
-          "mode": "frass_and_indigestible_residue",
+        "active_compost": {
+          "mode": "frass_moultings_and_indigestible_precompost",
           "unit": "lb"
         }
       },
@@ -212,10 +229,11 @@
         "Working surface is approximately 16 ft2; only a shallow active substrate layer is assumed so most gross volume remains available for ventilation, heat dissipation, drainage, and self-harvest geometry.",
         "Usable feedstock capacity is 60 lb and maximum standing larval biomass is 20 lb.",
         "At maximum larval biomass, nominal feed-processing capacity is 26 lb/day (20 lb larvae x 1.3 lb feed/lb larvae/day).",
-        "Of processed feed, nominal mass balance is 35% new larval biomass, 35% frass/organic residue, and 30% untracked metabolic, gaseous, and evaporative losses.",
+        "Of processed feed, nominal mass balance is 35% new larval biomass, 35% frass/pre-compost residue, and 30% untracked metabolic, gaseous, and evaporative losses.",
         "Larval growth is additionally capped at 0.45 of standing biomass per day; the 1.3 feed rate and 0.35 yield were intentionally chosen to closely match that ceiling.",
         "Self-harvest is modeled as 0.08 of standing larval biomass per day, scaled by feeding activity; no feed means no modeled growth or maturation loss.",
-        "Routine reactor tending accrues 0.1 labor-hours/day; collection and transport of feedstocks are accounted for elsewhere."
+        "Routine reactor tending accrues 0.1 labor-hours/day; collection and transport of feedstocks are accounted for elsewhere.",
+        "Frass, moultings, and indigestible residue are treated as active compost (BSFL pre-compost) and remain at the reactor until collected."
       ]
     },
     {

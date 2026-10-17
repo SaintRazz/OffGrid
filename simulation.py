@@ -29,6 +29,12 @@ ORDER_CATALOG = {
         "unit": "lb",
         "integer_only": False,
     },
+    "straw": {
+        "resource_id": "carbonaceous_plant_waste",
+        "name": "Straw",
+        "unit": "lb",
+        "integer_only": False,
+    },
 }
 
 
@@ -150,19 +156,45 @@ class Simulation:
         kitchen_pickup = pickup_points.setdefault("kitchen_waste", {})
         kitchen_pickup.setdefault("column", 13.0)
         kitchen_pickup.setdefault("row", 40.0)
-        paper_pickup = pickup_points.setdefault("paper_waste", {})
-        paper_pickup.setdefault("column", 16.0)
-        paper_pickup.setdefault("row", 40.0)
+        legacy_paper_pickup = pickup_points.pop("paper_waste", None)
+        carbon_pickup = pickup_points.setdefault(
+            "carbonaceous_plant_waste",
+            legacy_paper_pickup if isinstance(legacy_paper_pickup, dict) else {},
+        )
+        carbon_pickup.setdefault("column", 16.0)
+        carbon_pickup.setdefault("row", 40.0)
         entrance = house.setdefault("entrance", {})
         entrance.setdefault("column", 14.5)
         entrance.setdefault("row", 40.0)
         outputs = house.setdefault("outputs", {})
         outputs.setdefault("kitchen_waste", 0.0)
-        outputs.setdefault("paper_waste", 0.0)
+        legacy_paper_output = max(0.0, float(outputs.pop("paper_waste", 0.0)))
+        outputs["carbonaceous_plant_waste"] = (
+            max(0.0, float(outputs.get("carbonaceous_plant_waste", 0.0)))
+            + legacy_paper_output
+        )
         storage_point = house.setdefault("storage_point", {})
         storage_point.setdefault("column", 20.0)
         storage_point.setdefault("row", 40.0)
         house.setdefault("storage", {})
+
+        # Resource-id migrations from earlier saves.  Paper waste and dry
+        # plant litter now share one carbonaceous-browns resource; BSFL
+        # organic residue is now the same transferable material as active
+        # compost/pre-compost.
+        alias_map = {
+            "paper_waste": "carbonaceous_plant_waste",
+            "plant_litter": "carbonaceous_plant_waste",
+            "organic_residue": "active_compost",
+        }
+        for mapping in (
+            self.game_state.setdefault("inventories", {}),
+            house.setdefault("storage", {}),
+        ):
+            for old_id, new_id in alias_map.items():
+                old_amount = max(0.0, float(mapping.pop(old_id, 0.0)))
+                if old_amount > 0:
+                    mapping[new_id] = max(0.0, float(mapping.get(new_id, 0.0))) + old_amount
 
         player = self.game_state.setdefault("player", {})
         player.setdefault("name", "Homesteader")
@@ -171,7 +203,17 @@ class Simulation:
         position.setdefault("row", float(max(0, int(map_state["height_tiles"]) - 1)))
         player.setdefault("last_direction", "down")
         player.setdefault("inventory", {})
+        for old_id, new_id in alias_map.items():
+            old_amount = max(0.0, float(player["inventory"].pop(old_id, 0.0)))
+            if old_amount > 0:
+                player["inventory"][new_id] = max(0.0, float(player["inventory"].get(new_id, 0.0))) + old_amount
         queue = player.setdefault("task_queue", [])
+        for task in queue:
+            if task.get("resource_id") in alias_map:
+                task["resource_id"] = alias_map[task["resource_id"]]
+            cargo = task.get("reserved_cargo")
+            if isinstance(cargo, dict) and cargo.get("resource_id") in alias_map:
+                cargo["resource_id"] = alias_map[cargo["resource_id"]]
         player.setdefault("next_task_id", 1)
 
         # Migrate the old single walking task into the new persistent queue.
@@ -189,12 +231,7 @@ class Simulation:
             self._normalize_instance(instance)
 
     def _normalize_instance(self, instance):
-        """
-        Bring facility instances to a common runtime shape.
-
-        Both x/y and column/row are accepted so the first GameState file and
-        the existing browser API can coexist during migration.
-        """
+        """Bring facility instances to a common runtime shape."""
         if "facility_id" not in instance and "type" in instance:
             instance["facility_id"] = instance["type"]
         if "type" not in instance and "facility_id" in instance:
@@ -211,7 +248,6 @@ class Simulation:
 
         facility_id = instance.get("facility_id")
         definition = self.facility_definitions.get(facility_id)
-
         if definition is not None:
             instance.setdefault("width", definition.get("width", 1))
             instance.setdefault("height", definition.get("height", 1))
@@ -220,10 +256,9 @@ class Simulation:
         instance.setdefault("condition", 1.0)
         instance.setdefault("accrued_labor_requirement", 0.0)
         instance.setdefault("last_operation", None)
+        instance.setdefault("stored_outputs", {})
+        instance.setdefault("production_remainders", {})
 
-        # BSFL state migration: older saves tracked growing and mature larvae
-        # separately.  The current model treats the colony as one aggregate
-        # standing larval biomass and self-harvests a continuous fraction.
         if facility_id == "chicken-coop":
             instance.setdefault("feed_mass", 0.0)
 
@@ -232,20 +267,28 @@ class Simulation:
                 old_growing = float(instance.get("growing_larval_biomass", 0.0))
                 old_mature = float(instance.get("mature_larval_biomass", 0.0))
                 instance["larval_biomass"] = max(0.0, old_growing + old_mature)
-
             instance.setdefault("feedstock_mass", 0.0)
             instance.setdefault("residue_mass", 0.0)
-
-            # These are obsolete process states.  harvested_insect_forage was
-            # already exported to inventory by the old processor, so it is
-            # deliberately discarded rather than exported a second time.
             instance.pop("growing_larval_biomass", None)
             instance.pop("mature_larval_biomass", None)
-            instance.pop("harvested_insect_forage", None)
+            old_harvest = max(0.0, float(instance.pop("harvested_insect_forage", 0.0)))
+            if old_harvest > 0:
+                outputs = instance.setdefault("stored_outputs", {})
+                outputs["insect_forage"] = float(outputs.get("insect_forage", 0.0)) + old_harvest
+            outputs = instance.setdefault("stored_outputs", {})
+            legacy_residue_output = max(0.0, float(outputs.pop("organic_residue", 0.0)))
+            if legacy_residue_output > 0:
+                instance["residue_mass"] = max(0.0, float(instance.get("residue_mass", 0.0))) + legacy_residue_output
 
-    # ------------------------------------------------------------------
-    # Household profile helpers
-    # ------------------------------------------------------------------
+        if facility_id == "compost-pile":
+            # Migrate the earlier one-pool compost model into fresh feedstock.
+            old_raw = max(0.0, float(instance.pop("raw_material_mass", 0.0)))
+            instance.setdefault("unbalanced_kitchen_waste", 0.0)
+            instance.setdefault("unbalanced_scat", 0.0)
+            instance.setdefault("available_carbon_material", 0.0)
+            instance.setdefault("feedstock_mass", old_raw)
+            instance.setdefault("active_compost_mass", 0.0)
+            instance.setdefault("mature_compost_mass", 0.0)
 
     def household_daily_baseline(self):
         """
@@ -343,6 +386,62 @@ class Simulation:
                 ),
             }
 
+        # Aggregate physical stock by resource for the Resource overview.  The
+        # authoritative locations remain House Storage, Homesteader inventory,
+        # house pickup points, and facility-local process/output state.
+        stock_totals = {resource_id: 0.0 for resource_id in self.resource_definitions}
+        for resource_id, amount in self.game_state.get("inventories", {}).items():
+            stock_totals[resource_id] = stock_totals.get(resource_id, 0.0) + max(0.0, float(amount))
+        for mapping in (
+            self.game_state.get("house", {}).get("storage", {}),
+            self.game_state.get("house", {}).get("outputs", {}),
+            self.game_state.get("player", {}).get("inventory", {}),
+        ):
+            for resource_id, amount in mapping.items():
+                stock_totals[resource_id] = stock_totals.get(resource_id, 0.0) + max(0.0, float(amount))
+        for instance in self.game_state.get("facilities", []):
+            self._normalize_instance(instance)
+            for resource_id, amount in (instance.get("stored_outputs") or {}).items():
+                stock_totals[resource_id] = stock_totals.get(resource_id, 0.0) + max(0.0, float(amount))
+            if instance.get("facility_id") == "chicken-coop":
+                stock_totals["chicken"] = stock_totals.get("chicken", 0.0) + max(0.0, float(instance.get("current_fill", 0.0)))
+                stock_totals["feed"] = stock_totals.get("feed", 0.0) + max(0.0, float(instance.get("feed_mass", 0.0)))
+            elif instance.get("facility_id") == "bsfl-reactor":
+                stock_totals["bsfl_biomass"] = stock_totals.get("bsfl_biomass", 0.0) + max(0.0, float(instance.get("larval_biomass", 0.0)))
+                stock_totals["kitchen_waste"] = stock_totals.get("kitchen_waste", 0.0) + max(0.0, float(instance.get("feedstock_mass", 0.0)))
+                stock_totals["active_compost"] = stock_totals.get("active_compost", 0.0) + max(0.0, float(instance.get("residue_mass", 0.0)))
+            elif instance.get("facility_id") == "compost-pile":
+                stock_totals["kitchen_waste"] = stock_totals.get("kitchen_waste", 0.0) + max(0.0, float(instance.get("unbalanced_kitchen_waste", 0.0)))
+                stock_totals["scat"] = stock_totals.get("scat", 0.0) + max(0.0, float(instance.get("unbalanced_scat", 0.0)))
+                stock_totals["carbonaceous_plant_waste"] = stock_totals.get("carbonaceous_plant_waste", 0.0) + max(0.0, float(instance.get("available_carbon_material", 0.0)))
+                stock_totals["active_compost"] = stock_totals.get("active_compost", 0.0) + max(0.0, float(instance.get("active_compost_mass", 0.0)))
+                stock_totals["compost"] = stock_totals.get("compost", 0.0) + max(0.0, float(instance.get("mature_compost_mass", 0.0)))
+
+        resource_overview = {"biological_materials": {}, "utilities": {}}
+        for resource_id, definition in self.resource_definitions.items():
+            category = definition.get("category", "biological_materials")
+            behavior = definition.get("behavior", "stock")
+            if behavior == "stock":
+                resource_overview.setdefault(category, {})[resource_id] = {
+                    **deepcopy(definition),
+                    "amount": round(stock_totals.get(resource_id, 0.0), 4),
+                }
+
+        resource_overview["utilities"]["electricity_balance"] = {
+            "name": "Electricity",
+            "behavior": "flow",
+            "unit": "kWh/hour",
+            "demand": round(float(self.game_state["current_flows"].get("electricity_consumed_this_tick_kwh", 0.0)), 4),
+            "onsite_generation": round(float(self.game_state["current_flows"].get("electricity_generated_this_tick_kwh", 0.0)), 4),
+            "grid_requirement": round(float(self.game_state["current_flows"].get("grid_electricity_this_tick_kwh", 0.0)), 4),
+        }
+        resource_overview["utilities"]["municipal_water"] = {
+            "name": "Municipal potable water",
+            "behavior": "flow",
+            "unit": "gal/hour",
+            "amount": round(float(self.game_state["current_flows"].get("municipal_water_this_tick_gal", 0.0)), 4),
+        }
+
         return {
             # Compatibility fields for the existing frontend
             "current_time": current_time.isoformat(),
@@ -353,6 +452,7 @@ class Simulation:
                 0.0,
             ),
             "resources": resources,
+            "resource_overview": resource_overview,
 
             # New state model
             "schema_version": self.game_state.get("schema_version"),
@@ -462,7 +562,6 @@ class Simulation:
 
     def _create_instance(self, definition, column, row, width, height, rotated):
         facility_id = definition["id"]
-
         instance = {
             "instance_id": self._next_instance_id(facility_id),
             "facility_id": facility_id,
@@ -477,12 +576,12 @@ class Simulation:
             "condition": 1.0,
             "accrued_labor_requirement": 0.0,
             "last_operation": None,
+            "stored_outputs": {},
+            "production_remainders": {},
         }
 
         container = definition.get("container")
         if container:
-            # current_fill means the current occupancy/content of the primary
-            # container when a single generic value is sufficient.
             instance["current_fill"] = 0.0
 
         process = definition.get("process", {})
@@ -490,7 +589,12 @@ class Simulation:
             instance.setdefault(state_name, 0.0)
 
         if facility_id == "compost-pile":
-            instance.setdefault("raw_material_mass", 0.0)
+            instance.setdefault("unbalanced_kitchen_waste", 0.0)
+            instance.setdefault("unbalanced_scat", 0.0)
+            instance.setdefault("available_carbon_material", 0.0)
+            instance.setdefault("feedstock_mass", 0.0)
+            instance.setdefault("active_compost_mass", 0.0)
+            instance.setdefault("mature_compost_mass", 0.0)
 
         return instance
 
@@ -528,47 +632,111 @@ class Simulation:
 
         if facility_id == "chicken-coop":
             if resource_id == "chicken":
-                return {
-                    "field": "current_fill",
-                    "capacity": float(container.get("capacity", 0.0)),
-                    "unit": "bird",
-                    "integer_only": True,
-                }
+                return {"field": "current_fill", "capacity": float(container.get("capacity", 0.0)), "unit": "bird", "integer_only": True}
             if resource_id == "feed":
-                return {
-                    "field": "feed_mass",
-                    "capacity": None,
-                    "unit": "lb",
-                    "integer_only": False,
-                }
+                return {"field": "feed_mass", "capacity": None, "unit": "lb", "integer_only": False}
 
         if facility_id == "bsfl-reactor":
             if resource_id == "bsfl_biomass":
-                return {
-                    "field": "larval_biomass",
-                    "capacity": float(process.get("maximum_larval_biomass_lb", 0.0)),
-                    "unit": "lb",
-                    "integer_only": False,
-                }
+                return {"field": "larval_biomass", "capacity": float(process.get("maximum_larval_biomass_lb", 0.0)), "unit": "lb", "integer_only": False}
             if resource_id == "kitchen_waste":
-                return {
-                    "field": "feedstock_mass",
-                    "capacity": float(container.get("usable_capacity_lb", 0.0)),
-                    "unit": "lb",
-                    "integer_only": False,
-                }
+                return {"field": "feedstock_mass", "capacity": float(container.get("usable_capacity_lb", 0.0)), "unit": "lb", "integer_only": False}
 
         if facility_id == "compost-pile":
             rule = (definition.get("inputs") or {}).get(resource_id) or {}
-            if rule.get("mode") == "shared_feedstock":
+            mode = rule.get("mode")
+            field_by_resource = {
+                "kitchen_waste": "unbalanced_kitchen_waste",
+                "scat": "unbalanced_scat",
+                "carbonaceous_plant_waste": "available_carbon_material",
+                "active_compost": "active_compost_mass",
+            }
+            field = field_by_resource.get(resource_id)
+            if field and mode in {"nitrogen_rich", "carbon_rich", "active_compost"}:
                 return {
-                    "field": "raw_material_mass",
+                    "field": field,
                     "capacity": float(container.get("capacity", 0.0)),
+                    "capacity_mode": "shared_total_mass",
                     "unit": "lb",
                     "integer_only": False,
                 }
 
         raise ValueError("That material cannot be added to this facility.")
+
+    def _compost_total_mass(self, instance):
+        fields = (
+            "unbalanced_kitchen_waste",
+            "unbalanced_scat",
+            "available_carbon_material",
+            "feedstock_mass",
+            "active_compost_mass",
+            "mature_compost_mass",
+        )
+        return sum(max(0.0, float(instance.get(field, 0.0))) for field in fields)
+
+    def _compost_carbon_demand(self, instance, definition=None):
+        definition = definition or self.facility_definitions.get("compost-pile") or {}
+        inputs = definition.get("inputs") or {}
+        kitchen_factor = float((inputs.get("kitchen_waste") or {}).get("carbon_demand_lb_per_lb", 0.5))
+        scat_factor = float((inputs.get("scat") or {}).get("carbon_demand_lb_per_lb", 1.5))
+        demand = (
+            max(0.0, float(instance.get("unbalanced_kitchen_waste", 0.0))) * kitchen_factor
+            + max(0.0, float(instance.get("unbalanced_scat", 0.0))) * scat_factor
+        )
+        available = max(0.0, float(instance.get("available_carbon_material", 0.0)))
+        return max(0.0, demand - available), demand, available
+
+    def _compost_description(self, instance):
+        feedstock = max(0.0, float(instance.get("feedstock_mass", 0.0)))
+        active = max(0.0, float(instance.get("active_compost_mass", 0.0)))
+        mature = max(0.0, float(instance.get("mature_compost_mass", 0.0)))
+        total = feedstock + active + mature
+        if total <= 1e-9:
+            pending = (
+                max(0.0, float(instance.get("unbalanced_kitchen_waste", 0.0)))
+                + max(0.0, float(instance.get("unbalanced_scat", 0.0)))
+                + max(0.0, float(instance.get("available_carbon_material", 0.0)))
+            )
+            return "Fresh compost inputs awaiting balancing and mixing" if pending > 1e-9 else "Empty compost pile"
+        if mature / total >= 0.70 and feedstock / total <= 0.10:
+            return "Composted material ready for use as soil amendment"
+        if feedstock >= active:
+            return "Organic waste rapidly decomposing"
+        return "Active composting and curing"
+
+    def _mix_compost_inputs(self, instance):
+        definition = self.facility_definitions.get("compost-pile") or {}
+        inputs = definition.get("inputs") or {}
+        kitchen = max(0.0, float(instance.get("unbalanced_kitchen_waste", 0.0)))
+        scat = max(0.0, float(instance.get("unbalanced_scat", 0.0)))
+        carbon = max(0.0, float(instance.get("available_carbon_material", 0.0)))
+        kitchen_factor = float((inputs.get("kitchen_waste") or {}).get("carbon_demand_lb_per_lb", 0.5))
+        scat_factor = float((inputs.get("scat") or {}).get("carbon_demand_lb_per_lb", 1.5))
+        demand = kitchen * kitchen_factor + scat * scat_factor
+        if demand <= 1e-12 or carbon <= 1e-12:
+            return {"mixed_feedstock_lb": 0.0, "carbon_used_lb": 0.0}
+
+        fraction = min(1.0, carbon / demand)
+        kitchen_used = kitchen * fraction
+        scat_used = scat * fraction
+        carbon_used = demand * fraction
+        mixed = kitchen_used + scat_used + carbon_used
+
+        instance["unbalanced_kitchen_waste"] = max(0.0, kitchen - kitchen_used)
+        instance["unbalanced_scat"] = max(0.0, scat - scat_used)
+        instance["available_carbon_material"] = max(0.0, carbon - carbon_used)
+        instance["feedstock_mass"] = max(0.0, float(instance.get("feedstock_mass", 0.0))) + mixed
+        return {
+            "mixed_feedstock_lb": mixed,
+            "kitchen_waste_used_lb": kitchen_used,
+            "scat_used_lb": scat_used,
+            "carbon_used_lb": carbon_used,
+        }
+
+    def _facility_output_amount(self, instance, resource_id, source_field=None):
+        if source_field:
+            return max(0.0, float(instance.get(source_field, 0.0)))
+        return max(0.0, float((instance.get("stored_outputs") or {}).get(resource_id, 0.0)))
 
     def _player_inventory_amount(self, resource_id):
         inventory = self.game_state["player"].setdefault("inventory", {})
@@ -622,10 +790,12 @@ class Simulation:
         if spec.get("integer_only") and not amount.is_integer():
             raise ValueError(f"{spec['name']} must be ordered in whole units.")
 
-        self._add_house_storage(resource_id, amount)
+        delivered_resource_id = spec.get("resource_id", resource_id)
+        self._add_house_storage(delivered_resource_id, amount)
         event = self._append_pending_event({
             "type": "house_delivery",
-            "resource_id": resource_id,
+            "catalog_item_id": resource_id,
+            "resource_id": delivered_resource_id,
             "amount": amount,
             "unit": spec.get("unit"),
             "effective": "immediate",
@@ -741,7 +911,7 @@ class Simulation:
         return deepcopy(self.game_state["player"])
 
     def queue_house_pickup(self, resource_id, amount):
-        if resource_id not in {"kitchen_waste", "paper_waste"}:
+        if resource_id not in {"kitchen_waste", "carbonaceous_plant_waste"}:
             raise ValueError("That resource is not available from a house pickup point.")
         try:
             amount = float(amount)
@@ -841,16 +1011,18 @@ class Simulation:
         if amount > available + 1e-9:
             raise ValueError(f"The Homesteader is carrying only {available:g}.")
 
-        current = max(0.0, float(instance.get(spec["field"], 0.0)))
         reserved = 0.0
         for task in self.game_state["player"].get("task_queue", []):
-            if (
-                task.get("type") == "facility_fill"
-                and task.get("target_instance_id") == instance_id
-                and task.get("target_field") == spec["field"]
-            ):
-                reserved += float(task.get("amount", 0.0))
+            if task.get("type") == "facility_fill" and task.get("target_instance_id") == instance_id:
+                if spec.get("capacity_mode") == "shared_total_mass" or task.get("target_field") == spec["field"]:
+                    reserved += float(task.get("amount", 0.0))
+
         if spec["capacity"] is not None:
+            current = (
+                self._compost_total_mass(instance)
+                if spec.get("capacity_mode") == "shared_total_mass"
+                else max(0.0, float(instance.get(spec["field"], 0.0)))
+            )
             remaining = max(0.0, float(spec["capacity"]) - current - reserved)
             if amount > remaining + 1e-9:
                 raise ValueError(f"That exceeds remaining capacity ({remaining:g} {spec['unit']}).")
@@ -872,6 +1044,54 @@ class Simulation:
 
     def fill_facility(self, instance_id, resource_id, amount):
         return self.queue_facility_fill(instance_id, resource_id, amount)
+
+    def queue_facility_collection(self, instance_id, resource_id, amount, source_field=None):
+        instance = self._find_facility_instance(instance_id)
+        if not isinstance(resource_id, str) or not resource_id:
+            raise ValueError("A resource must be selected.")
+        try:
+            amount = float(amount)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Collection amount must be numeric.") from exc
+        if amount <= 0:
+            raise ValueError("Collection amount must be greater than zero.")
+
+        allowed_sources = {
+            "compost-pile": {("compost", "mature_compost_mass")},
+            "bsfl-reactor": {("insect_forage", None), ("active_compost", "residue_mass")},
+        }
+        facility_id = instance.get("facility_id")
+        if (resource_id, source_field) not in allowed_sources.get(facility_id, set()):
+            raise ValueError("That output is not available for collection from this facility.")
+
+        resource_def = self.resource_definitions.get(resource_id) or {}
+        if resource_def.get("quantity_mode") == "discrete" and not amount.is_integer():
+            raise ValueError(f"{resource_def.get('name', resource_id)} must be collected in whole units.")
+
+        available = self._facility_output_amount(instance, resource_id, source_field)
+        reserved = sum(
+            max(0.0, float(task.get("amount", 0.0)))
+            for task in self.game_state["player"].get("task_queue", [])
+            if task.get("type") == "facility_collect"
+            and task.get("target_instance_id") == instance_id
+            and task.get("resource_id") == resource_id
+            and task.get("source_field") == source_field
+        )
+        free = max(0.0, available - reserved)
+        if amount > free + 1e-9:
+            raise ValueError(f"Only {free:g} is available to collect.")
+
+        definition = self.facility_definitions.get(instance["facility_id"]) or {}
+        return self._queue_task({
+            "type": "facility_collect",
+            "description": f"Collect {amount:g} {resource_def.get('name', resource_id)} from {definition.get('name', instance['facility_id'])}",
+            "target_instance_id": instance_id,
+            "resource_id": resource_id,
+            "amount": amount,
+            "source_field": source_field,
+            "work_minutes_total": 1,
+            "work_minutes_remaining": 1,
+        })
 
     def queue_service_facility(self, instance_id):
         instance = self._find_facility_instance(instance_id)
@@ -964,6 +1184,24 @@ class Simulation:
             instance = self._find_facility_instance(task["target_instance_id"])
             field = task["target_field"]
             instance[field] = max(0.0, float(instance.get(field, 0.0))) + float(task["amount"])
+        elif task_type == "facility_collect":
+            instance = self._find_facility_instance(task["target_instance_id"])
+            amount = float(task["amount"])
+            source_field = task.get("source_field")
+            resource_id = task["resource_id"]
+            if source_field:
+                available = max(0.0, float(instance.get(source_field, 0.0)))
+                instance[source_field] = max(0.0, available - amount)
+            else:
+                outputs = instance.setdefault("stored_outputs", {})
+                available = max(0.0, float(outputs.get(resource_id, 0.0)))
+                outputs[resource_id] = max(0.0, available - amount)
+            self._add_player_inventory(resource_id, amount)
+        elif task_type == "service_facility":
+            instance = self._find_facility_instance(task["target_instance_id"])
+            if instance.get("facility_id") == "compost-pile":
+                mixed = self._mix_compost_inputs(instance)
+                task["compost_mix_result"] = {key: round(value, 6) for key, value in mixed.items()}
 
         self._append_pending_event({
             "type": "task_completed",
@@ -1279,7 +1517,7 @@ class Simulation:
         flows.setdefault("blackwater_generated_this_tick_gal", 0.0)
         flows.setdefault("other_water_use_this_tick_gal", 0.0)
         flows.setdefault("kitchen_waste_generated_this_tick_lb", 0.0)
-        flows.setdefault("paper_waste_generated_this_tick_lb", 0.0)
+        flows.setdefault("carbonaceous_plant_waste_generated_this_tick_lb", 0.0)
         flows.setdefault("recalcitrant_waste_generated_this_tick_lb", 0.0)
         flows.setdefault("garbage_to_curb_this_tick_lb", 0.0)
         flows.setdefault("recyclable_paper_generated_this_tick_lb", 0.0)
@@ -1339,7 +1577,7 @@ class Simulation:
             0.0,
             float(household_flows.get("kitchen_waste_lb", 0.0)),
         )
-        paper_waste = max(
+        carbonaceous_plant_waste = max(
             0.0,
             float(household_flows.get("recyclable_paper_lb", 0.0)),
         )
@@ -1355,10 +1593,11 @@ class Simulation:
         house_outputs["kitchen_waste"] = (
             float(house_outputs.get("kitchen_waste", 0.0)) + kitchen_waste
         )
-        house_outputs["paper_waste"] = (
-            float(house_outputs.get("paper_waste", 0.0)) + paper_waste
+        house_outputs["carbonaceous_plant_waste"] = (
+            float(house_outputs.get("carbonaceous_plant_waste", 0.0))
+            + carbonaceous_plant_waste
         )
-        flows["paper_waste_generated_this_tick_lb"] = paper_waste
+        flows["carbonaceous_plant_waste_generated_this_tick_lb"] = carbonaceous_plant_waste
         flows["recalcitrant_waste_generated_this_tick_lb"] = recalcitrant_waste
         flows["garbage_to_curb_this_tick_lb"] = recalcitrant_waste
 
@@ -1384,7 +1623,7 @@ class Simulation:
                 "greywater_gal": round(greywater, 6),
                 "blackwater_gal": round(blackwater, 6),
                 "kitchen_waste_lb": round(kitchen_waste, 6),
-                "paper_waste_lb": round(paper_waste, 6),
+                "carbonaceous_plant_waste_lb": round(carbonaceous_plant_waste, 6),
                 "recalcitrant_waste_lb": round(recalcitrant_waste, 6),
             },
             "electricity_end_use_kwh": end_use_electricity,
@@ -1539,79 +1778,67 @@ class Simulation:
         }
 
     def _process_compost_pile(self, instance, definition):
+        """Run one hour of the three-pool compost model.
+
+        Balanced feedstock converts into active compost; active compost converts
+        into mature soil amendment. Mature material remains at the pile until
+        physically collected by the Homesteader.
+        """
         process = definition.get("process") or {}
-        outputs = definition.get("outputs") or {}
+        feedstock = max(0.0, float(instance.get("feedstock_mass", 0.0)))
+        active = max(0.0, float(instance.get("active_compost_mass", 0.0)))
+        mature = max(0.0, float(instance.get("mature_compost_mass", 0.0)))
 
-        raw_mass = max(0.0, float(instance.get("raw_material_mass", 0.0)))
+        feed_daily = max(0.0, min(1.0, float(process.get("feedstock_conversion_rate_per_day", 0.10))))
+        mature_daily = max(0.0, min(1.0, float(process.get("active_maturation_rate_per_day", 0.04))))
+        feed_retention = max(0.0, min(1.0, float(process.get("feedstock_to_active_retention_fraction", 0.70))))
+        mature_retention = max(0.0, min(1.0, float(process.get("active_to_mature_retention_fraction", 0.65))))
 
-        if raw_mass <= 0:
-            return {
-                "status": "idle",
-                "reason": "no composting material",
-                "raw_material_mass": 0.0,
-                "produced": {},
-                "accrued_labor_requirement": round(
-                    instance["accrued_labor_requirement"], 6
-                ),
-            }
+        feed_hourly = 1.0 - (1.0 - feed_daily) ** (1.0 / HOURS_PER_DAY) if feed_daily < 1.0 else 1.0
+        mature_hourly = 1.0 - (1.0 - mature_daily) ** (1.0 / HOURS_PER_DAY) if mature_daily < 1.0 else 1.0
 
-        processing_days = process.get("nominal_processing_time_days")
-        if not processing_days:
-            return {
-                "status": "idle",
-                "reason": "processing rate not configured",
-                "raw_material_mass": raw_mass,
-                "produced": {},
-            }
+        # Mature the material that existed at the beginning of the hour first,
+        # then process fresh feedstock so newly created active compost is not
+        # allowed to traverse two stages in the same tick.
+        active_processed = min(active, active * mature_hourly)
+        mature_created = active_processed * mature_retention
+        maturation_loss = active_processed - mature_created
+        active -= active_processed
+        mature += mature_created
 
-        # First-order processing: each hour a fraction of the current active
-        # mass equal to 1/(processing_days * 24) is transformed.
-        processed = raw_mass / (float(processing_days) * HOURS_PER_DAY)
+        feedstock_processed = min(feedstock, feedstock * feed_hourly)
+        active_created = feedstock_processed * feed_retention
+        decomposition_loss = feedstock_processed - active_created
+        feedstock -= feedstock_processed
+        active += active_created
 
-        full_load_rate = process.get("full_load_processing_rate_per_day")
-        if full_load_rate is not None:
-            processed = min(processed, float(full_load_rate) / HOURS_PER_DAY)
+        for key, value in (("feedstock_mass", feedstock), ("active_compost_mass", active), ("mature_compost_mass", mature)):
+            instance[key] = 0.0 if value < 1e-8 else value
 
-        processed = min(processed, raw_mass)
-        instance["raw_material_mass"] = raw_mass - processed
-
-        compost_rule = outputs.get("compost", {})
-        yield_fraction = float(compost_rule.get("mass_yield_fraction", 0.0))
-        compost = processed * yield_fraction
-        self._add_inventory("compost", compost)
-
-        forage_rule = outputs.get("insect_forage", {})
-        full_load_forage_daily = float(
-            forage_rule.get("rate_per_day_at_full_load", 0.0)
-        )
-
-        container_capacity = float(
-            (definition.get("container") or {}).get("capacity", 0.0)
-        )
-        fill_fraction = (
-            min(1.0, raw_mass / container_capacity)
-            if container_capacity > 0
-            else 0.0
-        )
-        insect_forage = (
-            full_load_forage_daily / HOURS_PER_DAY * fill_fraction
-        )
-        self._add_inventory("insect_forage", insect_forage)
-
-        produced = {}
-        if compost > 0:
-            produced["compost"] = round(compost, 6)
-        if insect_forage > 0:
-            produced["insect_forage"] = round(insect_forage, 6)
+        carbon_needed, total_carbon_demand, available_carbon = self._compost_carbon_demand(instance, definition)
+        total_mass = self._compost_total_mass(instance)
+        capacity = max(0.0, float((definition.get("container") or {}).get("capacity", 0.0)))
 
         return {
-            "status": "operating",
-            "processed_raw_material": round(processed, 6),
-            "raw_material_mass": round(instance["raw_material_mass"], 6),
-            "produced": produced,
-            "accrued_labor_requirement": round(
-                instance["accrued_labor_requirement"], 6
-            ),
+            "status": "operating" if (feedstock_processed > 0 or active_processed > 0) else "idle",
+            "description": self._compost_description(instance),
+            "capacity_lb": round(capacity, 6),
+            "total_mass_lb": round(total_mass, 6),
+            "feedstock_mass": round(instance["feedstock_mass"], 6),
+            "active_compost_mass": round(instance["active_compost_mass"], 6),
+            "mature_compost_mass": round(instance["mature_compost_mass"], 6),
+            "unbalanced_kitchen_waste": round(float(instance.get("unbalanced_kitchen_waste", 0.0)), 6),
+            "unbalanced_scat": round(float(instance.get("unbalanced_scat", 0.0)), 6),
+            "available_carbon_material": round(available_carbon, 6),
+            "carbon_demand_total_lb": round(total_carbon_demand, 6),
+            "additional_carbon_needed_lb": round(carbon_needed, 6),
+            "processed_feedstock_lb": round(feedstock_processed, 6),
+            "active_compost_created_lb": round(active_created, 6),
+            "rapid_decomposition_loss_lb": round(decomposition_loss, 6),
+            "active_compost_matured_lb": round(active_processed, 6),
+            "mature_amendment_created_lb": round(mature_created, 6),
+            "curing_loss_lb": round(maturation_loss, 6),
+            "accrued_labor_requirement": round(instance["accrued_labor_requirement"], 6),
         }
 
     def _process_bsfl_reactor(self, instance, definition):
@@ -1756,10 +1983,10 @@ class Simulation:
         instance["larval_biomass"] = max(0.0, larval_biomass)
         instance["residue_mass"] = max(0.0, residue_mass)
 
-        # Self-harvested larvae leave the reactor immediately as the ordinary
-        # insect_forage resource.  Residue remains inside until a later
-        # collection/emptying action is implemented.
-        self._add_inventory("insect_forage", harvested)
+        # Self-harvested larvae leave the active matrix but remain physically
+        # in the reactor catchment until the Homesteader collects them.
+        outputs = instance.setdefault("stored_outputs", {})
+        outputs["insect_forage"] = max(0.0, float(outputs.get("insect_forage", 0.0))) + harvested
 
         if larval_biomass <= 0:
             status = "idle"
@@ -1784,12 +2011,13 @@ class Simulation:
             "feeding_fraction": round(feeding_fraction, 6),
             "processed_feedstock": round(processed, 6),
             "gross_larval_growth": round(gross_growth, 6),
-            "new_residue": round(new_residue, 6),
+            "new_active_compost_precompost": round(new_residue, 6),
             "untracked_loss": round(untracked_loss, 6),
             "nominal_untracked_loss": round(nominal_untracked_loss, 6),
             "self_harvested_insect_forage": round(self_harvest, 6),
             "capacity_overflow_harvest": round(overflow_harvest, 6),
             "harvested_insect_forage": round(harvested, 6),
+            "catchment_insect_forage": round(float(instance.get("stored_outputs", {}).get("insect_forage", 0.0)), 6),
             "accrued_labor_requirement": round(
                 instance["accrued_labor_requirement"], 6
             ),

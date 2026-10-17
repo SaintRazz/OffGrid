@@ -51,6 +51,8 @@
     "kitchen_waste_is_undifferentiated": true,
     "electricity_values_are_static_for_now": true,
     "electricity_is_annual_average_daily_equivalent": true,
-    "heating_and_cooling_are_not_literal_same_day_operation": true
+    "heating_and_cooling_are_not_literal_same_day_operation": true,
+    "recyclable_paper_routes_to_resource": "carbonaceous_plant_waste",
+    "carbonaceous_plant_waste_definition": "Compostable dry browns such as household paper/cardboard, dry leaves, and straw; fresh grass clippings are excluded for now."
   }
 }

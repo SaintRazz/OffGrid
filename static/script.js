@@ -42,26 +42,26 @@ if (landGrid) {
   const playerInventoryList = document.getElementById("player-inventory-list");
   const currentTaskCard = document.getElementById("current-task-card");
   const taskQueueList = document.getElementById("task-queue-list");
+  const biologicalResourceList = document.getElementById("biological-resource-list");
+  const utilityResourceList = document.getElementById("utility-resource-list");
 
   const mapViewport = document.getElementById("map-viewport");
   const zoomInButton = document.getElementById("zoom-in");
   const zoomOutButton = document.getElementById("zoom-out");
   const zoomResetButton = document.getElementById("zoom-reset");
   const zoomLevel = document.getElementById("zoom-level");
-
   const infoTabs = document.querySelectorAll(".info-tab");
   const infoPanels = document.querySelectorAll(".info-panel");
 
   const definitionsById = new Map();
-
   let placements = [];
   let simulationState = null;
   let selectedBuildId = null;
   let selectedMapObject = null;
+  let inspectorMode = "summary";
   let preview = null;
   let avatar = null;
   let avatarTooltip = null;
-
   let mapZoom = 1;
   let mapPanX = 0;
   let mapPanY = 0;
@@ -73,238 +73,125 @@ if (landGrid) {
   let dragStartPanX = 0;
   let dragStartPanY = 0;
   let suppressNextMapClick = false;
-
   let runtimeTimer = null;
   let advanceInFlight = false;
   let gameLoaded = false;
   let interactionOpen = false;
   let inspectorPausedRuntime = false;
-  let inspectorMode = "summary";
 
   for (let row = 0; row < GRID_SIZE; row += 1) {
     for (let column = 0; column < GRID_SIZE; column += 1) {
       const cell = document.createElement("div");
-
       cell.className = "grid-cell";
       cell.dataset.row = String(row);
       cell.dataset.column = String(column);
       cell.style.gridRow = String(row + 1);
       cell.style.gridColumn = String(column + 1);
-
       cell.setAttribute("role", "gridcell");
-      cell.setAttribute(
-        "aria-label",
-        `Grass tile, row ${row + 1}, column ${column + 1}`
-      );
-
+      cell.setAttribute("aria-label", `Grass tile, row ${row + 1}, column ${column + 1}`);
       landGrid.appendChild(cell);
     }
   }
 
   function formatAmount(value, digits = 4) {
-    return new Intl.NumberFormat(
-      undefined,
-      {
-        maximumFractionDigits: digits,
-      }
-    ).format(Number(value ?? 0));
+    return new Intl.NumberFormat(undefined, {
+      maximumFractionDigits: digits,
+    }).format(Number(value ?? 0));
   }
 
   function prettyName(value) {
     return String(value ?? "")
       .replaceAll("_", " ")
       .replaceAll("-", " ")
-      .replace(
-        /\b\w/g,
-        (letter) => letter.toUpperCase()
-      );
+      .replace(/\b\w/g, (c) => c.toUpperCase());
   }
 
-  function resourceDefinition(resourceId) {
-    return (
-      simulationState
-        ?.resource_definitions
-        ?.[resourceId] ??
-      null
-    );
+  function resourceDefinition(id) {
+    return simulationState?.resource_definitions?.[id] ?? null;
   }
 
-  function resourceLabel(resourceId) {
-    return (
-      resourceDefinition(resourceId)
-        ?.name ??
-      prettyName(resourceId)
-    );
+  function resourceLabel(id) {
+    return resourceDefinition(id)?.name ?? prettyName(id);
   }
 
-  function resourceUnit(resourceId) {
-    return (
-      resourceDefinition(resourceId)
-        ?.unit ??
-      (
-        resourceId === "chicken"
-          ? "bird"
-          : "lb"
-      )
-    );
+  function resourceUnit(id) {
+    return resourceDefinition(id)?.unit ?? (id === "chicken" ? "bird" : "lb");
+  }
+
+  function isDiscrete(id) {
+    return resourceDefinition(id)?.quantity_mode === "discrete";
   }
 
   function addListItem(list, label, value) {
-    const item =
-      document.createElement("li");
-
-    item.textContent =
-      `${label}: ${value}`;
-
+    const item = document.createElement("li");
+    item.textContent = `${label}: ${value}`;
     list.appendChild(item);
   }
 
   async function api(url, options = {}) {
-    const response =
-      await fetch(
-        url,
-        {
-          headers: {
-            "Content-Type":
-              "application/json",
+    const response = await fetch(url, {
+      headers: {
+        "Content-Type": "application/json",
+        ...(options.headers ?? {}),
+      },
+      ...options,
+    });
 
-            ...(options.headers ?? {}),
-          },
-
-          ...options,
-        }
-      );
-
-    const data =
-      await response
-        .json()
-        .catch(
-          () => ({})
-        );
+    const data = await response.json().catch(() => ({}));
 
     if (!response.ok) {
-      throw new Error(
-        data.error ||
-        `${response.status} ${response.statusText}`
-      );
+      throw new Error(data.error || `${response.status} ${response.statusText}`);
     }
 
     return data;
   }
 
-  // ============================================================
-  // Runtime
-  // ============================================================
-
   function currentSpeedMinutes() {
-    const value =
-      Number(
-        gameSpeedSelect
-          ?.value ??
-        1
-      );
-
-    return (
-      Number.isFinite(value) &&
-      value > 0
-        ? Math.floor(value)
-        : 1
-    );
+    const value = Number(gameSpeedSelect?.value ?? 1);
+    return Number.isFinite(value) && value > 0 ? Math.floor(value) : 1;
   }
 
   function speedLabel(minutes) {
-    if (minutes === 1) {
-      return "1 sim min / real sec";
-    }
+    if (minutes === 1) return "1 sim min / real sec";
+    if (minutes === 30) return "30 sim min / real sec";
+    if (minutes === 60) return "1 sim hour / real sec";
+    if (minutes === 1440) return "1 sim day / real sec";
 
-    if (minutes === 30) {
-      return "30 sim min / real sec";
-    }
-
-    if (minutes === 60) {
-      return "1 sim hour / real sec";
-    }
-
-    if (minutes === 1440) {
-      return "1 sim day / real sec";
-    }
-
-    return (
-      `${minutes} sim min / real sec`
-    );
+    return `${minutes} sim min / real sec`;
   }
 
-  function setRuntimeRunning(
-    running,
-    label = null
-  ) {
-    runtimeStatus
-      ?.classList
-      .toggle(
-        "is-running",
-        running
-      );
+  function setRuntimeRunning(running, label = null) {
+    runtimeStatus?.classList.toggle("is-running", running);
 
     if (runtimeLabel) {
-      runtimeLabel.textContent =
-        label ??
-        (
-          running
-            ? "Running"
-            : "Paused"
-        );
+      runtimeLabel.textContent = label ?? (running ? "Running" : "Paused");
     }
   }
 
   function startRuntime() {
-    if (
-      runtimeTimer !== null ||
-      interactionOpen ||
-      !gameLoaded
-    ) {
+    if (runtimeTimer !== null || interactionOpen || !gameLoaded) {
       return;
     }
 
     setRuntimeRunning(
       true,
-      `Running · ${speedLabel(
-        currentSpeedMinutes()
-      )}`
+      `Running · ${speedLabel(currentSpeedMinutes())}`
     );
 
-    runtimeTimer =
-      window.setInterval(
-        runGamePulse,
-        GAME_PULSE_MS
-      );
+    runtimeTimer = window.setInterval(runGamePulse, GAME_PULSE_MS);
   }
 
-  function stopRuntime(
-    label = "Paused"
-  ) {
+  function stopRuntime(label = "Paused") {
     if (runtimeTimer !== null) {
-      window.clearInterval(
-        runtimeTimer
-      );
-
+      clearInterval(runtimeTimer);
       runtimeTimer = null;
     }
 
-    setRuntimeRunning(
-      false,
-      label
-    );
+    setRuntimeRunning(false, label);
   }
 
-  async function advanceSimulation(
-    minutes,
-    statusMessage = null
-  ) {
-    if (
-      !gameLoaded ||
-      advanceInFlight ||
-      interactionOpen
-    ) {
+  async function advanceSimulation(minutes, message = null) {
+    if (!gameLoaded || advanceInFlight || interactionOpen) {
       return null;
     }
 
@@ -315,37 +202,23 @@ if (landGrid) {
     }
 
     try {
-      const result =
-        await api(
-          "/api/advance",
-          {
-            method: "POST",
-
-            body:
-              JSON.stringify(
-                {
-                  minutes,
-                }
-              ),
-          }
-        );
+      const result = await api("/api/advance", {
+        method: "POST",
+        body: JSON.stringify({ minutes }),
+      });
 
       renderState(
         result.state,
-        result.activity ??
-          result.movement ??
-          null
+        result.activity ?? result.movement ?? null
       );
 
-      if (statusMessage) {
-        statusLine.textContent =
-          statusMessage;
+      if (message) {
+        statusLine.textContent = message;
       }
 
       return result;
     } catch (error) {
       stopRuntime("Stopped");
-
       statusLine.textContent =
         `Automatic time stopped: ${error.message}`;
 
@@ -354,135 +227,93 @@ if (landGrid) {
       advanceInFlight = false;
 
       if (nextDayButton) {
-        nextDayButton.disabled =
-          false;
+        nextDayButton.disabled = false;
       }
     }
   }
 
   async function runGamePulse() {
-    await advanceSimulation(
-      currentSpeedMinutes()
-    );
+    await advanceSimulation(currentSpeedMinutes());
   }
 
   function setDateAndClock(state) {
-    const dateElement =
-      document.getElementById(
-        "simulation-date"
-      );
-
-    const clockElement =
-      document.getElementById(
-        "simulation-clock"
-      );
+    const dateElement = document.getElementById("simulation-date");
+    const clockElement = document.getElementById("simulation-clock");
 
     if (!state?.current_time) {
-      dateElement.textContent =
-        "Not started";
-
-      clockElement.textContent =
-        "--:--";
-
+      dateElement.textContent = "Not started";
+      clockElement.textContent = "--:--";
       return;
     }
 
-    const date =
-      new Date(
-        state.current_time
-      );
+    const date = new Date(state.current_time);
 
     dateElement.textContent =
-      new Intl.DateTimeFormat(
-        undefined,
-        {
-          year: "numeric",
-          month: "short",
-          day: "numeric",
-        }
-      ).format(date);
+      new Intl.DateTimeFormat(undefined, {
+        year: "numeric",
+        month: "short",
+        day: "numeric",
+      }).format(date);
 
     clockElement.textContent =
-      new Intl.DateTimeFormat(
-        undefined,
-        {
-          hour: "numeric",
-          minute: "2-digit",
-        }
-      ).format(date);
+      new Intl.DateTimeFormat(undefined, {
+        hour: "numeric",
+        minute: "2-digit",
+      }).format(date);
   }
 
-  // ============================================================
-  // Map zoom and pan
-  // ============================================================
-
-  function clamp(
-    value,
-    minimum,
-    maximum
-  ) {
-    return Math.min(
-      maximum,
-      Math.max(
-        minimum,
-        value
-      )
-    );
+  function clamp(v, lo, hi) {
+    return Math.min(hi, Math.max(lo, v));
   }
 
   function clampMapPan(
-    panX = mapPanX,
-    panY = mapPanY,
+    x = mapPanX,
+    y = mapPanY,
     zoom = mapZoom
   ) {
-    const minimumX =
-      Math.min(
-        0,
-        mapViewport.clientWidth -
-          landGrid.offsetWidth *
-          zoom
-      );
-
-    const minimumY =
-      Math.min(
-        0,
-        mapViewport.clientHeight -
-          landGrid.offsetHeight *
-          zoom
-      );
-
     return {
       x: clamp(
-        panX,
-        minimumX,
+        x,
+        Math.min(
+          0,
+          mapViewport.clientWidth -
+            landGrid.offsetWidth * zoom
+        ),
         0
       ),
 
       y: clamp(
-        panY,
-        minimumY,
+        y,
+        Math.min(
+          0,
+          mapViewport.clientHeight -
+            landGrid.offsetHeight * zoom
+        ),
         0
       ),
     };
   }
 
   function renderMapTransform() {
-    const clamped =
-      clampMapPan();
+    const p = clampMapPan();
 
-    mapPanX =
-      clamped.x;
+    mapPanX = p.x;
+    mapPanY = p.y;
 
-    mapPanY =
-      clamped.y;
+    const isDefaultView =
+      mapZoom === 1 &&
+      mapPanX === 0 &&
+      mapPanY === 0;
 
-    landGrid.style.transform =
-      `translate(${mapPanX}px, ${mapPanY}px) scale(${mapZoom})`;
+    if (isDefaultView) {
+      landGrid.style.transform = "none";
+    } else {
+      landGrid.style.transform =
+        `translate(${mapPanX}px, ${mapPanY}px) scale(${mapZoom})`;
+    }
 
     zoomLevel.textContent =
-      `${Math.round(
-        mapZoom * 100
-      )}%`;
+      `${Math.round(mapZoom * 100)}%`;
 
     mapViewport.classList.toggle(
       "is-zoomed",
@@ -497,65 +328,47 @@ if (landGrid) {
   }
 
   function setMapZoom(
-    requestedZoom,
+    requested,
     clientX = null,
     clientY = null
   ) {
-    const newZoom =
+    const next =
       clamp(
-        requestedZoom,
+        requested,
         MIN_ZOOM,
         MAX_ZOOM
       );
 
-    if (
-      newZoom === mapZoom
-    ) {
+    if (next === mapZoom) {
       return;
     }
 
     const rect =
-      mapViewport
-        .getBoundingClientRect();
+      mapViewport.getBoundingClientRect();
 
-    const focalX =
+    const fx =
       clientX == null
         ? rect.width / 2
-        : clientX -
-          rect.left;
+        : clientX - rect.left;
 
-    const focalY =
+    const fy =
       clientY == null
         ? rect.height / 2
-        : clientY -
-          rect.top;
+        : clientY - rect.top;
 
-    const mapX =
-      (
-        focalX -
-        mapPanX
-      ) /
-      mapZoom;
+    const mx =
+      (fx - mapPanX) / mapZoom;
 
-    const mapY =
-      (
-        focalY -
-        mapPanY
-      ) /
-      mapZoom;
+    const my =
+      (fy - mapPanY) / mapZoom;
 
     mapPanX =
-      focalX -
-      mapX *
-      newZoom;
+      fx - mx * next;
 
     mapPanY =
-      focalY -
-      mapY *
-      newZoom;
+      fy - my * next;
 
-    mapZoom =
-      newZoom;
+    mapZoom = next;
 
     renderMapTransform();
   }
@@ -564,28 +377,17 @@ if (landGrid) {
     mapZoom = 1;
     mapPanX = 0;
     mapPanY = 0;
-
     renderMapTransform();
   }
 
   zoomInButton.addEventListener(
     "click",
-    () => {
-      setMapZoom(
-        mapZoom +
-        ZOOM_STEP
-      );
-    }
+    () => setMapZoom(mapZoom + ZOOM_STEP)
   );
 
   zoomOutButton.addEventListener(
     "click",
-    () => {
-      setMapZoom(
-        mapZoom -
-        ZOOM_STEP
-      );
-    }
+    () => setMapZoom(mapZoom - ZOOM_STEP)
   );
 
   zoomResetButton.addEventListener(
@@ -605,11 +407,11 @@ if (landGrid) {
 
       setMapZoom(
         mapZoom +
-        (
-          event.deltaY < 0
-            ? ZOOM_STEP
-            : -ZOOM_STEP
-        ),
+          (
+            event.deltaY < 0
+              ? ZOOM_STEP
+              : -ZOOM_STEP
+          ),
         event.clientX,
         event.clientY
       );
@@ -631,23 +433,14 @@ if (landGrid) {
       }
 
       mapPointerDown = true;
-
-      mapPointerId =
-        event.pointerId;
-
+      mapPointerId = event.pointerId;
       mapDragStarted = false;
 
-      dragStartX =
-        event.clientX;
+      dragStartX = event.clientX;
+      dragStartY = event.clientY;
 
-      dragStartY =
-        event.clientY;
-
-      dragStartPanX =
-        mapPanX;
-
-      dragStartPanY =
-        mapPanY;
+      dragStartPanX = mapPanX;
+      dragStartPanY = mapPanY;
     }
   );
 
@@ -656,26 +449,20 @@ if (landGrid) {
     (event) => {
       if (
         !mapPointerDown ||
-        event.pointerId !==
-          mapPointerId
+        event.pointerId !== mapPointerId
       ) {
         return;
       }
 
-      const deltaX =
-        event.clientX -
-        dragStartX;
+      const dx =
+        event.clientX - dragStartX;
 
-      const deltaY =
-        event.clientY -
-        dragStartY;
+      const dy =
+        event.clientY - dragStartY;
 
       if (!mapDragStarted) {
         if (
-          Math.hypot(
-            deltaX,
-            deltaY
-          ) <
+          Math.hypot(dx, dy) <
           DRAG_THRESHOLD_PX
         ) {
           return;
@@ -692,25 +479,19 @@ if (landGrid) {
         );
 
         clearMapSelection();
-
         closeInspector();
       }
 
       event.preventDefault();
 
-      const clamped =
+      const p =
         clampMapPan(
-          dragStartPanX +
-          deltaX,
-          dragStartPanY +
-          deltaY
+          dragStartPanX + dx,
+          dragStartPanY + dy
         );
 
-      mapPanX =
-        clamped.x;
-
-      mapPanY =
-        clamped.y;
+      mapPanX = p.x;
+      mapPanY = p.y;
 
       renderMapTransform();
     }
@@ -719,15 +500,13 @@ if (landGrid) {
   function finishMapDrag(event) {
     if (
       !mapPointerDown ||
-      event.pointerId !==
-        mapPointerId
+      event.pointerId !== mapPointerId
     ) {
       return;
     }
 
     if (mapDragStarted) {
-      suppressNextMapClick =
-        true;
+      suppressNextMapClick = true;
     }
 
     mapPointerDown = false;
@@ -803,96 +582,64 @@ if (landGrid) {
     };
   }
 
-  // ============================================================
-  // Placement
-  // ============================================================
-
   function reservedHouseZones() {
     const house =
-      simulationState
-        ?.house ??
-      {};
+      simulationState?.house ?? {};
 
     const zones = [];
 
     for (
       const point
       of Object.values(
-        house.pickup_points ??
-        {}
+        house.pickup_points ?? {}
       )
     ) {
-      zones.push(
-        {
-          column:
-            Math.floor(
-              Number(
-                point.column
-              )
-            ),
+      zones.push({
+        column:
+          Math.floor(
+            Number(point.column)
+          ),
 
-          row:
-            Math.floor(
-              Number(
-                point.row
-              )
-            ),
+        row:
+          Math.floor(
+            Number(point.row)
+          ),
 
-          width: 2,
-          height: 2,
-        }
-      );
+        width: 2,
+        height: 2,
+      });
     }
 
-    if (
-      house.storage_point
-    ) {
-      zones.push(
-        {
-          column:
-            Math.floor(
-              Number(
-                house
-                  .storage_point
-                  .column
-              )
-            ),
+    if (house.storage_point) {
+      zones.push({
+        column:
+          Math.floor(
+            Number(
+              house.storage_point.column
+            )
+          ),
 
-          row:
-            Math.floor(
-              Number(
-                house
-                  .storage_point
-                  .row
-              )
-            ),
+        row:
+          Math.floor(
+            Number(
+              house.storage_point.row
+            )
+          ),
 
-          width: 3,
-          height: 2,
-        }
-      );
+        width: 3,
+        height: 2,
+      });
     }
 
     return zones;
   }
 
-  function rectanglesOverlap(
-    a,
-    b
-  ) {
+  function rectanglesOverlap(a, b) {
     return !(
-      a.column +
-        a.width <=
-        b.column ||
-      b.column +
-        b.width <=
-        a.column ||
-      a.row +
-        a.height <=
-        b.row ||
-      b.row +
-        b.height <=
-        a.row
+      a.column + a.width <= b.column ||
+      b.column + b.width <= a.column ||
+      a.row + a.height <= b.row ||
+      b.row + b.height <= a.row
     );
   }
 
@@ -912,32 +659,29 @@ if (landGrid) {
     if (
       column < 0 ||
       row < 0 ||
-      column + width >
-        GRID_SIZE ||
-      row + height >
-        GRID_SIZE
+      column + width > GRID_SIZE ||
+      row + height > GRID_SIZE
     ) {
       return false;
     }
 
     if (
-      reservedHouseZones()
-        .some(
-          (zone) =>
-            rectanglesOverlap(
-              candidate,
-              zone
-            )
-        )
+      reservedHouseZones().some(
+        (z) =>
+          rectanglesOverlap(
+            candidate,
+            z
+          )
+      )
     ) {
       return false;
     }
 
     return placements.every(
-      (placed) =>
+      (p) =>
         !rectanglesOverlap(
           candidate,
-          placed
+          p
         )
     );
   }
@@ -953,12 +697,12 @@ if (landGrid) {
   ) {
     removePreview();
 
-    const definition =
+    const def =
       definitionsById.get(
         selectedBuildId
       );
 
-    if (!definition) {
+    if (!def) {
       return;
     }
 
@@ -971,78 +715,63 @@ if (landGrid) {
       "building-sprite building-preview";
 
     preview.src =
-      `/static/assets/sprites/${definition.image}`;
+      `/static/assets/sprites/${def.image}`;
 
     preview.alt = "";
 
     preview.style.gridColumn =
-      `${column + 1} / span ${definition.width}`;
+      `${column + 1} / span ${def.width}`;
 
     preview.style.gridRow =
-      `${row + 1} / span ${definition.height}`;
+      `${row + 1} / span ${def.height}`;
 
     preview.classList.add(
       canPlace(
         column,
         row,
-        definition.width,
-        definition.height
+        def.width,
+        def.height
       )
         ? "is-valid"
         : "is-invalid"
     );
 
-    landGrid.appendChild(
-      preview
-    );
+    landGrid.appendChild(preview);
   }
 
   function syncPlacementUi() {
-    const active =
-      Boolean(
-        selectedBuildId
-      );
-
     cancelButton.disabled =
-      !active;
+      !selectedBuildId;
 
     buildList
       .querySelectorAll(
         ".build-option"
       )
       .forEach(
-        (button) => {
-          button.setAttribute(
+        (b) =>
+          b.setAttribute(
             "aria-pressed",
-            active &&
-            button.dataset
-              .facilityId ===
+            b.dataset.facilityId ===
               selectedBuildId
               ? "true"
               : "false"
-          );
-        }
+          )
       );
   }
 
-  function selectBuild(
-    facilityId
-  ) {
-    selectedBuildId =
-      facilityId;
+  function selectBuild(id) {
+    selectedBuildId = id;
 
     closeInspector();
-
     clearMapSelection();
-
     syncPlacementUi();
 
     statusLine.textContent =
       `Place ${
         definitionsById
-          .get(facilityId)
+          .get(id)
           ?.name ??
-        facilityId
+        id
       } on the map.`;
   }
 
@@ -1054,7 +783,6 @@ if (landGrid) {
     selectedBuildId = null;
 
     removePreview();
-
     syncPlacementUi();
 
     if (
@@ -1068,27 +796,25 @@ if (landGrid) {
 
   cancelButton.addEventListener(
     "click",
-    () => {
-      cancelPlacement();
-    }
+    () => cancelPlacement()
   );
 
   async function placeSelectedFacility(
     column,
     row
   ) {
-    const definition =
+    const def =
       definitionsById.get(
         selectedBuildId
       );
 
     if (
-      !definition ||
+      !def ||
       !canPlace(
         column,
         row,
-        definition.width,
-        definition.height
+        def.width,
+        def.height
       )
     ) {
       statusLine.textContent =
@@ -1124,7 +850,7 @@ if (landGrid) {
       cancelPlacement();
 
       statusLine.textContent =
-        `${definition.name} placed.`;
+        `${def.name} placed.`;
     } catch (error) {
       statusLine.textContent =
         error.message;
@@ -1140,18 +866,18 @@ if (landGrid) {
         ?.default_tile;
 
     for (
-      const definition
+      const def
       of simulationState
         ?.facility_definitions ??
       []
     ) {
       definitionsById.set(
-        definition.id,
-        definition
+        def.id,
+        def
       );
 
       if (
-        definition.id ===
+        def.id ===
         defaultTile
       ) {
         continue;
@@ -1163,20 +889,11 @@ if (landGrid) {
         );
 
       button.type = "button";
-
       button.className =
         "build-option";
 
       button.dataset.facilityId =
-        definition.id;
-
-      button.setAttribute(
-        "aria-pressed",
-        definition.id ===
-          selectedBuildId
-          ? "true"
-          : "false"
-      );
+        def.id;
 
       const image =
         document.createElement(
@@ -1184,7 +901,7 @@ if (landGrid) {
         );
 
       image.src =
-        `/static/assets/sprites/${definition.image}`;
+        `/static/assets/sprites/${def.image}`;
 
       image.alt = "";
 
@@ -1199,7 +916,7 @@ if (landGrid) {
         );
 
       name.textContent =
-        definition.name;
+        def.name;
 
       const size =
         document.createElement(
@@ -1207,7 +924,7 @@ if (landGrid) {
         );
 
       size.textContent =
-        `${definition.width} × ${definition.height} tiles`;
+        `${def.width} × ${def.height} tiles`;
 
       text.append(
         name,
@@ -1219,6 +936,11 @@ if (landGrid) {
         text
       );
 
+      button.addEventListener(
+        "click",
+        () => selectBuild(def.id)
+      );
+
       buildList.appendChild(
         button
       );
@@ -1227,42 +949,16 @@ if (landGrid) {
     syncPlacementUi();
   }
 
-  buildList.addEventListener(
-    "click",
-    (event) => {
-      const button =
-        event.target.closest(
-          ".build-option"
-        );
-
-      if (
-        button &&
-        buildList.contains(
-          button
-        )
-      ) {
-        selectBuild(
-          button.dataset.facilityId
-        );
-      }
-    }
-  );
-
-  // ============================================================
-  // Selection
-  // ============================================================
-
   function clearMapSelection() {
     landGrid
       .querySelectorAll(
         ".is-map-selected"
       )
       .forEach(
-        (element) => {
-          element.classList.remove(
+        (e) =>
+          e.classList.remove(
             "is-map-selected"
-          );
-        }
+          )
       );
   }
 
@@ -1272,17 +968,13 @@ if (landGrid) {
   ) {
     return (
       placements.find(
-        (instance) =>
-          column >=
-            instance.column &&
+        (i) =>
+          column >= i.column &&
           column <
-            instance.column +
-            instance.width &&
-          row >=
-            instance.row &&
+            i.column + i.width &&
+          row >= i.row &&
           row <
-            instance.row +
-            instance.height
+            i.row + i.height
       ) ??
       null
     );
@@ -1349,18 +1041,139 @@ if (landGrid) {
 
     selectedMapObject = null;
     inspectorMode = "summary";
-
-    inspectorPausedRuntime = false;
     interactionOpen = false;
+    inspectorPausedRuntime = false;
 
     if (shouldResume) {
       startRuntime();
     }
   }
 
-  function renderSelectionSummary(
-    selection
+  function compostStatus(instance) {
+    const f =
+      Number(
+        instance.feedstock_mass ??
+        0
+      );
+
+    const a =
+      Number(
+        instance.active_compost_mass ??
+        0
+      );
+
+    const m =
+      Number(
+        instance.mature_compost_mass ??
+        0
+      );
+
+    const total =
+      f + a + m;
+
+    const pending =
+      Number(
+        instance.unbalanced_kitchen_waste ??
+        0
+      ) +
+      Number(
+        instance.unbalanced_scat ??
+        0
+      ) +
+      Number(
+        instance.available_carbon_material ??
+        0
+      );
+
+    if (
+      total <= 1e-9
+    ) {
+      return pending > 1e-9
+        ? "Fresh compost inputs awaiting balancing and mixing"
+        : "Empty compost pile";
+    }
+
+    if (
+      m / total >= 0.70 &&
+      f / total <= 0.10
+    ) {
+      return "Composted material ready for use as soil amendment";
+    }
+
+    if (f >= a) {
+      return "Organic waste rapidly decomposing";
+    }
+
+    return "Active composting and curing";
+  }
+
+  function compostCarbonNeed(
+    instance,
+    definition
   ) {
+    const inputs =
+      definition?.inputs ??
+      {};
+
+    const demand =
+      Number(
+        instance.unbalanced_kitchen_waste ??
+        0
+      ) *
+        Number(
+          inputs
+            .kitchen_waste
+            ?.carbon_demand_lb_per_lb ??
+          0.5
+        ) +
+      Number(
+        instance.unbalanced_scat ??
+        0
+      ) *
+        Number(
+          inputs
+            .scat
+            ?.carbon_demand_lb_per_lb ??
+          1.5
+        );
+
+    const carbon =
+      Number(
+        instance.available_carbon_material ??
+        0
+      );
+
+    return {
+      demand,
+      carbon,
+      needed:
+        Math.max(
+          0,
+          demand - carbon
+        ),
+    };
+  }
+
+  function compostTotalMass(instance) {
+    return [
+      "unbalanced_kitchen_waste",
+      "unbalanced_scat",
+      "available_carbon_material",
+      "feedstock_mass",
+      "active_compost_mass",
+      "mature_compost_mass",
+    ].reduce(
+      (sum, key) =>
+        sum +
+        Number(
+          instance[key] ??
+          0
+        ),
+      0
+    );
+  }
+
+  function renderSelectionSummary(selection) {
     inspectorContent.replaceChildren();
 
     const dl =
@@ -1374,12 +1187,11 @@ if (landGrid) {
     let rows = [];
 
     if (
-      selection?.kind ===
+      selection.kind ===
       "house"
     ) {
-      const house =
-        simulationState
-          ?.house ??
+      const h =
+        simulationState?.house ??
         {};
 
       rows = [
@@ -1391,31 +1203,25 @@ if (landGrid) {
         [
           "Kitchen waste ready",
           `${formatAmount(
-            house.outputs
+            h.outputs
               ?.kitchen_waste ??
             0
           )} lb`,
         ],
 
         [
-          "Paper waste ready",
+          "Household paper browns ready",
           `${formatAmount(
-            house.outputs
-              ?.paper_waste ??
+            h.outputs
+              ?.carbonaceous_plant_waste ??
             0
           )} lb`,
         ],
       ];
     } else if (
-      selection?.kind ===
+      selection.kind ===
       "house_storage"
     ) {
-      const storage =
-        simulationState
-          ?.house
-          ?.storage ??
-        {};
-
       rows = [
         [
           "Type",
@@ -1426,10 +1232,13 @@ if (landGrid) {
           "Stored resource types",
           String(
             Object.values(
-              storage
+              simulationState
+                ?.house
+                ?.storage ??
+              {}
             ).filter(
-              (value) =>
-                Number(value) >
+              (v) =>
+                Number(v) >
                 1e-9
             ).length
           ),
@@ -1450,29 +1259,26 @@ if (landGrid) {
         ],
       ];
 
-      if (
-        selection.instance
-      ) {
+      const i =
+        selection.instance;
+
+      if (i) {
         rows.push(
           [
             "Condition",
             `${formatAmount(
               (
-                selection.instance
-                  .condition ??
+                i.condition ??
                 1
               ) * 100,
               1
             )}%`,
-          ]
-        );
+          ],
 
-        rows.push(
           [
             "Accrued labor",
             `${formatAmount(
-              selection.instance
-                .accrued_labor_requirement ??
+              i.accrued_labor_requirement ??
               0,
               3
             )} h`,
@@ -1480,81 +1286,166 @@ if (landGrid) {
         );
 
         if (
-          selection.instance
-            .current_fill !=
+          i.current_fill !=
           null
         ) {
           rows.push(
             [
               "Current fill",
               formatAmount(
-                selection.instance
-                  .current_fill
+                i.current_fill
               ),
             ]
           );
         }
 
         if (
-          selection.instance
-            .feed_mass !=
+          i.feed_mass !=
           null
         ) {
           rows.push(
             [
               "Chicken feed",
               `${formatAmount(
-                selection.instance
-                  .feed_mass
+                i.feed_mass
               )} lb`,
             ]
           );
         }
 
         if (
-          selection.instance
-            .feedstock_mass !=
-          null
+          i.facility_id ===
+          "bsfl-reactor"
         ) {
           rows.push(
             [
               "Feedstock",
               `${formatAmount(
-                selection.instance
-                  .feedstock_mass
+                i.feedstock_mass ??
+                0
               )} lb`,
-            ]
-          );
-        }
+            ],
 
-        if (
-          selection.instance
-            .larval_biomass !=
-          null
-        ) {
-          rows.push(
             [
               "Larval biomass",
               `${formatAmount(
-                selection.instance
-                  .larval_biomass
+                i.larval_biomass ??
+                0
+              )} lb`,
+            ],
+
+            [
+              "BSFL pre-compost",
+              `${formatAmount(
+                i.residue_mass ??
+                0
+              )} lb`,
+            ],
+
+            [
+              "Harvest catchment",
+              `${formatAmount(
+                i.stored_outputs
+                  ?.insect_forage ??
+                0
               )} lb`,
             ]
           );
         }
 
         if (
-          selection.instance
-            .raw_material_mass !=
-          null
+          i.facility_id ===
+          "compost-pile"
         ) {
+          const cap =
+            Number(
+              selection
+                .definition
+                ?.container
+                ?.capacity ??
+              0
+            );
+
+          const total =
+            compostTotalMass(i);
+
+          const c =
+            compostCarbonNeed(
+              i,
+              selection.definition
+            );
+
           rows.push(
             [
-              "Raw material",
+              "State",
+              compostStatus(i),
+            ],
+
+            [
+              "Pile mass",
               `${formatAmount(
-                selection.instance
-                  .raw_material_mass
+                total
+              )} / ${formatAmount(
+                cap
               )} lb`,
+            ],
+
+            [
+              "Fresh kitchen waste",
+              `${formatAmount(
+                i.unbalanced_kitchen_waste ??
+                0
+              )} lb`,
+            ],
+
+            [
+              "Fresh scat",
+              `${formatAmount(
+                i.unbalanced_scat ??
+                0
+              )} lb`,
+            ],
+
+            [
+              "Carbon-rich material",
+              `${formatAmount(
+                i.available_carbon_material ??
+                0
+              )} lb`,
+            ],
+
+            [
+              "Feedstock",
+              `${formatAmount(
+                i.feedstock_mass ??
+                0
+              )} lb`,
+            ],
+
+            [
+              "Active compost",
+              `${formatAmount(
+                i.active_compost_mass ??
+                0
+              )} lb`,
+            ],
+
+            [
+              "Mature amendment",
+              `${formatAmount(
+                i.mature_compost_mass ??
+                0
+              )} lb`,
+            ],
+
+            [
+              "Carbon balance",
+              c.needed > 1e-6
+                ? `Needs about ${formatAmount(
+                    c.needed,
+                    2
+                  )} lb browns`
+                : "Good",
             ]
           );
         }
@@ -1604,7 +1495,7 @@ if (landGrid) {
         row
       );
 
-    const definition =
+    const def =
       instance
         ? definitionsById.get(
             instance.facility_id
@@ -1620,7 +1511,7 @@ if (landGrid) {
       column,
       row,
       instance,
-      definition,
+      definition: def,
     };
 
     markMapSelection(
@@ -1630,7 +1521,7 @@ if (landGrid) {
     );
 
     inspectorTitle.textContent =
-      definition?.name ??
+      def?.name ??
       (
         instance
           ? "Facility"
@@ -1653,17 +1544,17 @@ if (landGrid) {
       !instance ||
       Number(
         instance
-          ?.accrued_labor_requirement ??
+          .accrued_labor_requirement ??
         0
       ) <=
-      1e-9;
+        1e-9;
 
     inspectorOverlay.hidden =
       false;
   }
 
   function openHouseSelection(
-    focusResourceId = null
+    resourceId = null
   ) {
     const house =
       simulationState?.house;
@@ -1674,7 +1565,7 @@ if (landGrid) {
 
     beginInteractionPause();
 
-    const entrance =
+    const p =
       house.entrance ??
       {
         column: 14.5,
@@ -1685,20 +1576,16 @@ if (landGrid) {
       kind: "house",
 
       column:
-        Number(
-          entrance.column
-        ),
+        Number(p.column),
 
       row:
-        Number(
-          entrance.row
-        ),
+        Number(p.row),
 
       house,
-      focusResourceId,
-    };
 
-    clearMapSelection();
+      focusResourceId:
+        resourceId,
+    };
 
     inspectorTitle.textContent =
       "House";
@@ -1707,7 +1594,7 @@ if (landGrid) {
       "Household waste pickup";
 
     inspectorMode =
-      focusResourceId
+      resourceId
         ? "contents"
         : "summary";
 
@@ -1716,8 +1603,7 @@ if (landGrid) {
       "contents"
     ) {
       renderHouseContentsManager(
-        selectedMapObject,
-        focusResourceId
+        resourceId
       );
     } else {
       renderSelectionSummary(
@@ -1747,7 +1633,7 @@ if (landGrid) {
 
     beginInteractionPause();
 
-    const point =
+    const p =
       house.storage_point ??
       {
         column: 20,
@@ -1755,22 +1641,17 @@ if (landGrid) {
       };
 
     selectedMapObject = {
-      kind: "house_storage",
+      kind:
+        "house_storage",
 
       column:
-        Number(
-          point.column
-        ),
+        Number(p.column),
 
       row:
-        Number(
-          point.row
-        ),
+        Number(p.row),
 
       house,
     };
-
-    clearMapSelection();
 
     inspectorTitle.textContent =
       mode === "order"
@@ -1802,150 +1683,6 @@ if (landGrid) {
       false;
   }
 
-  inspectorCloseButton.addEventListener(
-    "click",
-    () => {
-      closeInspector();
-    }
-  );
-
-  inspectorOverlay.addEventListener(
-    "click",
-    (event) => {
-      if (
-        event.target ===
-        inspectorOverlay
-      ) {
-        closeInspector();
-      }
-    }
-  );
-
-  walkHereButton.addEventListener(
-    "click",
-    async () => {
-      if (!selectedMapObject) {
-        return;
-      }
-
-      try {
-        const {
-          column,
-          row,
-        } =
-          selectedMapObject;
-
-        const result =
-          await api(
-            "/api/player/walk",
-            {
-              method: "POST",
-
-              body:
-                JSON.stringify(
-                  {
-                    column,
-                    row,
-                  }
-                ),
-            }
-          );
-
-        renderState(
-          result.state
-        );
-
-        closeInspector();
-
-        clearMapSelection();
-
-        statusLine.textContent =
-          `Walk task queued for tile ${Math.floor(column) + 1}, ${Math.floor(row) + 1}.`;
-      } catch (error) {
-        statusLine.textContent =
-          error.message;
-      }
-    }
-  );
-
-  serviceFacilityButton.addEventListener(
-    "click",
-    async () => {
-      const instance =
-        selectedMapObject
-          ?.instance;
-
-      if (!instance) {
-        return;
-      }
-
-      const facilityName =
-        selectedMapObject
-          ?.definition
-          ?.name ??
-        instance.facility_id;
-
-      try {
-        const result =
-          await api(
-            `/api/facilities/${
-              encodeURIComponent(
-                instance.instance_id
-              )
-            }/service`,
-            {
-              method: "POST",
-              body: "{}",
-            }
-          );
-
-        renderState(
-          result.state
-        );
-
-        closeInspector();
-
-        clearMapSelection();
-
-        statusLine.textContent =
-          `Service task queued for ${facilityName}.`;
-      } catch (error) {
-        statusLine.textContent =
-          error.message;
-      }
-    }
-  );
-
-  manageContentsButton.addEventListener(
-    "click",
-    () => {
-      if (!selectedMapObject) {
-        return;
-      }
-
-      if (
-        selectedMapObject.kind ===
-        "house_storage"
-      ) {
-        inspectorMode =
-          "storage";
-
-        renderHouseStorageManager();
-      } else {
-        inspectorMode =
-          "contents";
-
-        renderContentsManager(
-          selectedMapObject
-        );
-      }
-    }
-  );
-
-  // ============================================================
-  // Contents interfaces
-  // ============================================================
-
   function queuedFillAmount(
     instanceId,
     field
@@ -1957,51 +1694,84 @@ if (landGrid) {
       []
     )
       .filter(
-        (task) =>
-          task.type ===
+        (t) =>
+          t.type ===
             "facility_fill" &&
-          task.target_instance_id ===
+          t.target_instance_id ===
             instanceId &&
-          task.target_field ===
+          t.target_field ===
             field
       )
       .reduce(
-        (sum, task) =>
-          sum +
+        (s, t) =>
+          s +
           Number(
-            task.amount ??
+            t.amount ??
             0
           ),
         0
       );
   }
 
-  function managedContentOptions(
-    selection
+  function queuedCollectionAmount(
+    instanceId,
+    resourceId,
+    sourceField = null
   ) {
-    const instance =
+    return (
+      simulationState
+        ?.player
+        ?.task_queue ??
+      []
+    )
+      .filter(
+        (t) =>
+          t.type ===
+            "facility_collect" &&
+          t.target_instance_id ===
+            instanceId &&
+          t.resource_id ===
+            resourceId &&
+          (
+            t.source_field ??
+            null
+          ) === sourceField
+      )
+      .reduce(
+        (s, t) =>
+          s +
+          Number(
+            t.amount ??
+            0
+          ),
+        0
+      );
+  }
+
+  function managedContentOptions(selection) {
+    const i =
       selection?.instance;
 
-    const definition =
+    const d =
       selection?.definition;
 
     if (
-      !instance ||
-      !definition
+      !i ||
+      !d
     ) {
       return [];
     }
 
     const container =
-      definition.container ??
+      d.container ??
       {};
 
     const process =
-      definition.process ??
+      d.process ??
       {};
 
     if (
-      definition.id ===
+      d.id ===
       "chicken-coop"
     ) {
       return [
@@ -2014,12 +1784,6 @@ if (landGrid) {
 
           unit:
             "bird",
-
-          step:
-            1,
-
-          integerOnly:
-            true,
 
           currentField:
             "current_fill",
@@ -2041,12 +1805,6 @@ if (landGrid) {
           unit:
             "lb",
 
-          step:
-            0.1,
-
-          integerOnly:
-            false,
-
           currentField:
             "feed_mass",
 
@@ -2057,7 +1815,7 @@ if (landGrid) {
     }
 
     if (
-      definition.id ===
+      d.id ===
       "bsfl-reactor"
     ) {
       return [
@@ -2070,12 +1828,6 @@ if (landGrid) {
 
           unit:
             "lb",
-
-          step:
-            0.1,
-
-          integerOnly:
-            false,
 
           currentField:
             "larval_biomass",
@@ -2098,12 +1850,6 @@ if (landGrid) {
           unit:
             "lb",
 
-          step:
-            0.1,
-
-          integerOnly:
-            false,
-
           currentField:
             "feedstock_mass",
 
@@ -2118,103 +1864,250 @@ if (landGrid) {
     }
 
     if (
-      definition.id ===
+      d.id ===
       "compost-pile"
     ) {
-      return Object.entries(
-        definition.inputs ??
-        {}
-      )
-        .filter(
-          ([, rule]) =>
-            rule?.mode ===
-            "shared_feedstock"
-        )
-        .map(
-          ([resourceId]) => ({
-            resourceId,
+      return [
+        {
+          resourceId:
+            "kitchen_waste",
 
-            label:
-              prettyName(
-                resourceId
-              ),
+          label:
+            "Kitchen waste",
 
-            unit:
-              "lb",
+          unit:
+            "lb",
 
-            step:
-              0.1,
+          currentField:
+            "unbalanced_kitchen_waste",
 
-            integerOnly:
-              false,
+          sharedCapacity:
+            true,
 
-            currentField:
-              "raw_material_mass",
+          capacity:
+            Number(
+              container.capacity ??
+              0
+            ),
+        },
 
-            capacity:
-              Number(
-                container.capacity ??
-                0
-              ),
-          })
-        );
+        {
+          resourceId:
+            "scat",
+
+          label:
+            "Avian scat",
+
+          unit:
+            "lb",
+
+          currentField:
+            "unbalanced_scat",
+
+          sharedCapacity:
+            true,
+
+          capacity:
+            Number(
+              container.capacity ??
+              0
+            ),
+        },
+
+        {
+          resourceId:
+            "carbonaceous_plant_waste",
+
+          label:
+            "Carbonaceous plant waste",
+
+          unit:
+            "lb",
+
+          currentField:
+            "available_carbon_material",
+
+          sharedCapacity:
+            true,
+
+          capacity:
+            Number(
+              container.capacity ??
+              0
+            ),
+        },
+
+        {
+          resourceId:
+            "active_compost",
+
+          label:
+            "Active compost / pre-compost",
+
+          unit:
+            "lb",
+
+          currentField:
+            "active_compost_mass",
+
+          sharedCapacity:
+            true,
+
+          capacity:
+            Number(
+              container.capacity ??
+              0
+            ),
+        },
+      ];
     }
 
     return [];
   }
 
-  function renderContentsManager(
-    selection
-  ) {
-    if (
-      selection?.kind ===
-      "house"
-    ) {
-      renderHouseContentsManager(
-        selection,
-        selection.focusResourceId ??
-          null
-      );
+  function collectionOptions(selection) {
+    const i =
+      selection?.instance;
 
-      return;
+    if (!i) {
+      return [];
     }
 
     if (
-      selection?.kind ===
-      "house_storage"
+      i.facility_id ===
+      "compost-pile"
     ) {
-      renderHouseStorageManager();
+      return [
+        {
+          resourceId:
+            "compost",
 
-      return;
+          label:
+            "Mature compost",
+
+          unit:
+            "lb",
+
+          sourceField:
+            "mature_compost_mass",
+
+          available:
+            Number(
+              i.mature_compost_mass ??
+              0
+            ),
+        },
+      ];
     }
 
+    if (
+      i.facility_id ===
+      "bsfl-reactor"
+    ) {
+      return [
+        {
+          resourceId:
+            "insect_forage",
+
+          label:
+            "Self-harvested BSFL",
+
+          unit:
+            "lb",
+
+          sourceField:
+            null,
+
+          available:
+            Number(
+              i.stored_outputs
+                ?.insect_forage ??
+              0
+            ),
+        },
+
+        {
+          resourceId:
+            "active_compost",
+
+          label:
+            "BSFL pre-compost",
+
+          unit:
+            "lb",
+
+          sourceField:
+            "residue_mass",
+
+          available:
+            Number(
+              i.residue_mass ??
+              0
+            ),
+        },
+      ];
+    }
+
+    return [];
+  }
+
+  function renderContentsManager(selection) {
     inspectorContent.replaceChildren();
 
-    const options =
-      managedContentOptions(
-        selection
-      );
+    if (!selection?.instance) {
+      inspectorContent.textContent =
+        "This selection has no managed contents.";
+
+      return;
+    }
 
     if (
-      !selection?.instance ||
-      !options.length
+      selection.instance
+        .facility_id ===
+      "compost-pile"
     ) {
-      const message =
+      const note =
         document.createElement(
           "p"
         );
 
-      message.className =
-        "contents-message";
+      note.className =
+        "compost-state-note";
 
-      message.textContent =
-        "This facility has no manually managed contents yet.";
+      note.textContent =
+        compostStatus(
+          selection.instance
+        );
 
       inspectorContent.appendChild(
-        message
+        note
       );
 
-      return;
+      const c =
+        compostCarbonNeed(
+          selection.instance,
+          selection.definition
+        );
+
+      const carbon =
+        document.createElement(
+          "p"
+        );
+
+      carbon.className =
+        "carbon-balance-note";
+
+      carbon.textContent =
+        c.needed > 1e-6
+          ? `This compost pile needs about ${formatAmount(
+              c.needed,
+              2
+            )} lb of carbon-rich material to keep composting well.`
+          : "Carbon balance is currently adequate. Fresh balanced inputs are mixed into generic feedstock when the pile is serviced.";
+
+      inspectorContent.appendChild(
+        carbon
+      );
     }
 
     const intro =
@@ -2226,47 +2119,88 @@ if (landGrid) {
       "contents-message";
 
     intro.textContent =
-      "Submitting a transfer reserves the carried material immediately and adds a delivery task to the Homesteader's activity queue. The facility receives it only when she reaches the facility and completes the handling task.";
+      "Transfers reserve carried material immediately and queue a physical delivery. Collection is also queued and completes only after the Homesteader reaches the facility.";
 
     inspectorContent.appendChild(
       intro
     );
 
+    const options =
+      managedContentOptions(
+        selection
+      );
+
     for (
-      const option
+      const o
       of options
     ) {
-      const current =
-        Number(
-          selection.instance
-            ?.[option.currentField] ??
-          0
-        );
-
-      const queued =
-        queuedFillAmount(
-          selection.instance
-            .instance_id,
-          option.currentField
-        );
-
       const carried =
         Number(
           simulationState
             ?.player
             ?.inventory
-            ?.[option.resourceId] ??
+            ?.[o.resourceId] ??
           0
         );
 
+      const queued =
+        queuedFillAmount(
+          selection
+            .instance
+            .instance_id,
+          o.currentField
+        );
+
+      const current =
+        Number(
+          selection
+            .instance
+            [o.currentField] ??
+          0
+        );
+
+      const used =
+        o.sharedCapacity
+          ? compostTotalMass(
+              selection.instance
+            )
+          : current;
+
       const remaining =
-        option.capacity == null
+        o.capacity == null
           ? carried
           : Math.max(
               0,
-              option.capacity -
-              current -
-              queued
+              o.capacity -
+                used -
+                (
+                  o.sharedCapacity
+                    ? (
+                        simulationState
+                          ?.player
+                          ?.task_queue ??
+                        []
+                      )
+                        .filter(
+                          (t) =>
+                            t.type ===
+                              "facility_fill" &&
+                            t.target_instance_id ===
+                              selection
+                                .instance
+                                .instance_id
+                        )
+                        .reduce(
+                          (s, t) =>
+                            s +
+                            Number(
+                              t.amount ??
+                              0
+                            ),
+                          0
+                        )
+                    : queued
+                )
             );
 
       const maximum =
@@ -2286,13 +2220,13 @@ if (landGrid) {
       card.className =
         "contents-row";
 
-      const heading =
+      const h =
         document.createElement(
           "h3"
         );
 
-      heading.textContent =
-        option.label;
+      h.textContent =
+        o.label;
 
       const stats =
         document.createElement(
@@ -2303,14 +2237,22 @@ if (landGrid) {
         "contents-stats";
 
       stats.textContent =
-        `Current: ${formatAmount(current)} ${option.unit} · ` +
-        `Queued: ${formatAmount(queued)} ${option.unit} · ` +
-        `${
-          option.capacity == null
-            ? "Capacity: not modeled"
-            : `Capacity: ${formatAmount(option.capacity)} ${option.unit}`
-        } · ` +
-        `Carried: ${formatAmount(carried)} ${option.unit}`;
+        `At facility: ${formatAmount(
+          current
+        )} ${o.unit} · ` +
+        `Queued: ${formatAmount(
+          queued
+        )} ${o.unit} · ` +
+        `Carried: ${formatAmount(
+          carried
+        )} ${o.unit}` +
+        (
+          o.capacity == null
+            ? ""
+            : ` · Remaining pile/container capacity: ${formatAmount(
+                remaining
+              )} ${o.unit}`
+        );
 
       const form =
         document.createElement(
@@ -2326,7 +2268,7 @@ if (landGrid) {
         );
 
       label.textContent =
-        `Amount to deliver (${option.unit})`;
+        `Amount to deliver (${o.unit})`;
 
       const input =
         document.createElement(
@@ -2335,29 +2277,35 @@ if (landGrid) {
 
       input.type = "number";
       input.min = "0";
+
       input.step =
-        String(
-          option.step
-        );
+        isDiscrete(
+          o.resourceId
+        )
+          ? "1"
+          : "0.1";
 
       input.max =
-        String(
-          maximum
-        );
+        String(maximum);
 
       input.value =
         maximum > 0
           ? String(
-              option.integerOnly
+              isDiscrete(
+                o.resourceId
+              )
                 ? Math.max(
                     1,
                     Math.floor(
-                      maximum
+                      Math.min(
+                        maximum,
+                        1
+                      )
                     )
                   )
                 : Math.min(
                     maximum,
-                    option.step
+                    0.1
                   )
             )
           : "0";
@@ -2365,9 +2313,7 @@ if (landGrid) {
       input.disabled =
         maximum <= 0;
 
-      label.appendChild(
-        input
-      );
+      label.appendChild(input);
 
       const button =
         document.createElement(
@@ -2397,9 +2343,7 @@ if (landGrid) {
           event.preventDefault();
 
           const amount =
-            Number(
-              input.value
-            );
+            Number(input.value);
 
           if (
             !Number.isFinite(
@@ -2428,7 +2372,7 @@ if (landGrid) {
                     JSON.stringify(
                       {
                         resource_id:
-                          option.resourceId,
+                          o.resourceId,
 
                         amount,
                       }
@@ -2440,30 +2384,10 @@ if (landGrid) {
               result.state
             );
 
-            selectedMapObject.instance =
-              facilityAt(
-                selectedMapObject
-                  .column,
-                selectedMapObject
-                  .row
-              );
-
-            selectedMapObject.definition =
-              definitionsById.get(
-                selectedMapObject
-                  .instance
-                  ?.facility_id
-              );
-
-            inspectorMode =
-              "contents";
-
-            renderContentsManager(
-              selectedMapObject
-            );
+            refreshOpenInspector();
 
             statusLine.textContent =
-              `${option.label} delivery queued.`;
+              `${o.label} delivery queued.`;
           } catch (error) {
             statusLine.textContent =
               error.message;
@@ -2472,7 +2396,220 @@ if (landGrid) {
       );
 
       card.append(
-        heading,
+        h,
+        stats,
+        form
+      );
+
+      inspectorContent.appendChild(
+        card
+      );
+    }
+
+    for (
+      const o
+      of collectionOptions(
+        selection
+      )
+    ) {
+      const reserved =
+        queuedCollectionAmount(
+          selection
+            .instance
+            .instance_id,
+          o.resourceId,
+          o.sourceField
+        );
+
+      const available =
+        Math.max(
+          0,
+          o.available -
+            reserved
+        );
+
+      const card =
+        document.createElement(
+          "section"
+        );
+
+      card.className =
+        "contents-row output-collection-row";
+
+      const h =
+        document.createElement(
+          "h3"
+        );
+
+      h.textContent =
+        o.label;
+
+      const stats =
+        document.createElement(
+          "p"
+        );
+
+      stats.className =
+        "contents-stats";
+
+      stats.textContent =
+        `Available to collect: ${formatAmount(
+          available
+        )} ${o.unit}` +
+        (
+          reserved > 0
+            ? ` · Reserved by queued tasks: ${formatAmount(
+                reserved
+              )} ${o.unit}`
+            : ""
+        );
+
+      const form =
+        document.createElement(
+          "form"
+        );
+
+      form.className =
+        "contents-form";
+
+      const label =
+        document.createElement(
+          "label"
+        );
+
+      label.textContent =
+        `Amount to collect (${o.unit})`;
+
+      const input =
+        document.createElement(
+          "input"
+        );
+
+      input.type = "number";
+      input.min = "0";
+
+      input.step =
+        isDiscrete(
+          o.resourceId
+        )
+          ? "1"
+          : "0.1";
+
+      input.max =
+        String(available);
+
+      input.value =
+        available > 0
+          ? String(
+              isDiscrete(
+                o.resourceId
+              )
+                ? Math.max(
+                    1,
+                    Math.floor(
+                      Math.min(
+                        available,
+                        1
+                      )
+                    )
+                  )
+                : Math.min(
+                    available,
+                    0.1
+                  )
+            )
+          : "0";
+
+      input.disabled =
+        available <= 0;
+
+      label.appendChild(input);
+
+      const button =
+        document.createElement(
+          "button"
+        );
+
+      button.type =
+        "submit";
+
+      button.className =
+        "interaction-button";
+
+      button.textContent =
+        "Queue Collection";
+
+      button.disabled =
+        available <= 0;
+
+      form.append(
+        label,
+        button
+      );
+
+      form.addEventListener(
+        "submit",
+        async (event) => {
+          event.preventDefault();
+
+          const amount =
+            Number(input.value);
+
+          if (
+            !Number.isFinite(
+              amount
+            ) ||
+            amount <= 0
+          ) {
+            return;
+          }
+
+          try {
+            const result =
+              await api(
+                `/api/facilities/${
+                  encodeURIComponent(
+                    selection
+                      .instance
+                      .instance_id
+                  )
+                }/collect`,
+                {
+                  method:
+                    "POST",
+
+                  body:
+                    JSON.stringify(
+                      {
+                        resource_id:
+                          o.resourceId,
+
+                        amount,
+
+                        source_field:
+                          o.sourceField,
+                      }
+                    ),
+                }
+              );
+
+            renderState(
+              result.state
+            );
+
+            refreshOpenInspector();
+
+            statusLine.textContent =
+              `${o.label} collection queued.`;
+          } catch (error) {
+            statusLine.textContent =
+              error.message;
+          }
+        }
+      );
+
+      card.append(
+        h,
         stats,
         form
       );
@@ -2484,8 +2621,7 @@ if (landGrid) {
   }
 
   function renderHouseContentsManager(
-    selection,
-    focusResourceId = null
+    focus = null
   ) {
     inspectorContent.replaceChildren();
 
@@ -2505,44 +2641,36 @@ if (landGrid) {
       "contents-message";
 
     intro.textContent =
-      "Submitting a pickup reserves that household waste stream and adds a physical pickup task to the Homesteader's queue.";
+      "Submitting a pickup reserves the household waste immediately and queues a physical pickup task.";
 
     inspectorContent.appendChild(
       intro
     );
 
-    const streams = [
-      {
-        resourceId:
-          "kitchen_waste",
-
-        label:
-          "Kitchen waste",
-
-        unit:
-          "lb",
-      },
-
-      {
-        resourceId:
-          "paper_waste",
-
-        label:
-          "Paper waste",
-
-        unit:
-          "lb",
-      },
-    ];
-
     for (
       const stream
-      of streams
+      of [
+        {
+          id:
+            "kitchen_waste",
+
+          label:
+            "Kitchen waste",
+        },
+
+        {
+          id:
+            "carbonaceous_plant_waste",
+
+          label:
+            "Household paper waste (browns)",
+        },
+      ]
     ) {
       const available =
         Number(
           house.outputs
-            ?.[stream.resourceId] ??
+            ?.[stream.id] ??
           0
         );
 
@@ -2551,7 +2679,7 @@ if (landGrid) {
           simulationState
             ?.player
             ?.inventory
-            ?.[stream.resourceId] ??
+            ?.[stream.id] ??
           0
         );
 
@@ -2564,33 +2692,37 @@ if (landGrid) {
         "contents-row";
 
       if (
-        focusResourceId ===
-        stream.resourceId
+        focus ===
+        stream.id
       ) {
         card.classList.add(
           "is-focused"
         );
       }
 
-      const heading =
+      const h =
         document.createElement(
           "h3"
         );
 
-      heading.textContent =
+      h.textContent =
         stream.label;
 
-      const stats =
+      const p =
         document.createElement(
           "p"
         );
 
-      stats.className =
+      p.className =
         "contents-stats";
 
-      stats.textContent =
-        `Available: ${formatAmount(available)} ${stream.unit} · ` +
-        `Carried: ${formatAmount(carried)} ${stream.unit}`;
+      p.textContent =
+        `Available: ${formatAmount(
+          available
+        )} lb · ` +
+        `Carried: ${formatAmount(
+          carried
+        )} lb`;
 
       const form =
         document.createElement(
@@ -2606,7 +2738,7 @@ if (landGrid) {
         );
 
       label.textContent =
-        `Amount to pick up (${stream.unit})`;
+        "Amount to pick up (lb)";
 
       const input =
         document.createElement(
@@ -2616,11 +2748,8 @@ if (landGrid) {
       input.type = "number";
       input.min = "0";
       input.step = "0.1";
-
       input.max =
-        String(
-          available
-        );
+        String(available);
 
       input.value =
         available > 0
@@ -2635,41 +2764,34 @@ if (landGrid) {
       input.disabled =
         available <= 0;
 
-      label.appendChild(
-        input
-      );
+      label.appendChild(input);
 
-      const button =
+      const b =
         document.createElement(
           "button"
         );
 
-      button.type =
+      b.type =
         "submit";
 
-      button.className =
+      b.className =
         "interaction-button primary";
 
-      button.textContent =
+      b.textContent =
         "Queue Pickup";
 
-      button.disabled =
+      b.disabled =
         available <= 0;
 
       form.append(
         label,
-        button
+        b
       );
 
       form.addEventListener(
         "submit",
-        async (event) => {
-          event.preventDefault();
-
-          const amount =
-            Number(
-              input.value
-            );
+        async (e) => {
+          e.preventDefault();
 
           try {
             const result =
@@ -2683,9 +2805,12 @@ if (landGrid) {
                     JSON.stringify(
                       {
                         resource_id:
-                          stream.resourceId,
+                          stream.id,
 
-                        amount,
+                        amount:
+                          Number(
+                            input.value
+                          ),
                       }
                     ),
                 }
@@ -2695,16 +2820,9 @@ if (landGrid) {
               result.state
             );
 
-            inspectorMode =
-              "contents";
-
             renderHouseContentsManager(
-              selectedMapObject,
-              stream.resourceId
+              stream.id
             );
-
-            statusLine.textContent =
-              `${stream.label} pickup queued.`;
           } catch (error) {
             statusLine.textContent =
               error.message;
@@ -2713,8 +2831,8 @@ if (landGrid) {
       );
 
       card.append(
-        heading,
-        stats,
+        h,
+        p,
         form
       );
 
@@ -2745,12 +2863,12 @@ if (landGrid) {
       ),
     ]
       .filter(
-        (resourceId) =>
+        (id) =>
           Number(
             simulationState
               ?.house
               ?.storage
-              ?.[resourceId] ??
+              ?.[id] ??
             0
           ) >
             1e-9 ||
@@ -2758,7 +2876,7 @@ if (landGrid) {
             simulationState
               ?.player
               ?.inventory
-              ?.[resourceId] ??
+              ?.[id] ??
             0
           ) >
             1e-9
@@ -2784,44 +2902,42 @@ if (landGrid) {
       "contents-message";
 
     intro.textContent =
-      "Pickup and drop-off instructions are queued. Material is reserved immediately, but the transfer completes only after the Homesteader reaches House Storage and spends one simulated minute handling it.";
+      "Pickup and drop-off instructions are queued and take one simulated minute of handling after travel.";
 
     inspectorContent.appendChild(
       intro
     );
 
-    const resourceIds =
+    const ids =
       storageResourceIds();
 
-    if (
-      !resourceIds.length
-    ) {
-      const message =
+    if (!ids.length) {
+      const p =
         document.createElement(
           "p"
         );
 
-      message.className =
+      p.className =
         "contents-message";
 
-      message.textContent =
-        "House Storage is empty. Use Order to request supplies.";
+      p.textContent =
+        "House Storage is empty.";
 
       inspectorContent.appendChild(
-        message
+        p
       );
     }
 
     for (
-      const resourceId
-      of resourceIds
+      const id
+      of ids
     ) {
       const stored =
         Number(
           simulationState
             ?.house
             ?.storage
-            ?.[resourceId] ??
+            ?.[id] ??
           0
         );
 
@@ -2830,18 +2946,12 @@ if (landGrid) {
           simulationState
             ?.player
             ?.inventory
-            ?.[resourceId] ??
+            ?.[id] ??
           0
         );
 
       const unit =
-        resourceUnit(
-          resourceId
-        );
-
-      const integerOnly =
-        resourceId ===
-        "chicken";
+        resourceUnit(id);
 
       const card =
         document.createElement(
@@ -2851,27 +2961,29 @@ if (landGrid) {
       card.className =
         "contents-row";
 
-      const heading =
+      const h =
         document.createElement(
           "h3"
         );
 
-      heading.textContent =
-        resourceLabel(
-          resourceId
-        );
+      h.textContent =
+        resourceLabel(id);
 
-      const stats =
+      const p =
         document.createElement(
           "p"
         );
 
-      stats.className =
+      p.className =
         "contents-stats";
 
-      stats.textContent =
-        `House Storage: ${formatAmount(stored)} ${unit} · ` +
-        `Carried: ${formatAmount(carried)} ${unit}`;
+      p.textContent =
+        `House Storage: ${formatAmount(
+          stored
+        )} ${unit} · ` +
+        `Carried: ${formatAmount(
+          carried
+        )} ${unit}`;
 
       const controls =
         document.createElement(
@@ -2890,123 +3002,106 @@ if (landGrid) {
       input.min = "0";
 
       input.step =
-        integerOnly
+        isDiscrete(id)
           ? "1"
           : "0.1";
 
       input.value =
-        integerOnly
+        isDiscrete(id)
           ? "1"
           : "0.1";
 
-      const pickupButton =
+      const pickup =
         document.createElement(
           "button"
         );
 
-      pickupButton.type =
+      pickup.type =
         "button";
 
-      pickupButton.className =
+      pickup.className =
         "interaction-button primary";
 
-      pickupButton.textContent =
+      pickup.textContent =
         "Queue Pickup";
 
-      pickupButton.disabled =
+      pickup.disabled =
         stored <= 0;
 
-      const dropButton =
+      const drop =
         document.createElement(
           "button"
         );
 
-      dropButton.type =
+      drop.type =
         "button";
 
-      dropButton.className =
+      drop.className =
         "interaction-button";
 
-      dropButton.textContent =
+      drop.textContent =
         "Queue Drop Off";
 
-      dropButton.disabled =
+      drop.disabled =
         carried <= 0;
 
-      async function queueTransfer(
-        direction
-      ) {
-        const amount =
-          Number(
-            input.value
-          );
+      const go =
+        async (direction) => {
+          try {
+            const result =
+              await api(
+                "/api/house/storage/transfer",
+                {
+                  method:
+                    "POST",
 
-        try {
-          const result =
-            await api(
-              "/api/house/storage/transfer",
-              {
-                method:
-                  "POST",
+                  body:
+                    JSON.stringify(
+                      {
+                        resource_id:
+                          id,
 
-                body:
-                  JSON.stringify(
-                    {
-                      resource_id:
-                        resourceId,
+                        amount:
+                          Number(
+                            input.value
+                          ),
 
-                      amount,
+                        direction,
+                      }
+                    ),
+                }
+              );
 
-                      direction,
-                    }
-                  ),
-              }
+            renderState(
+              result.state
             );
 
-          renderState(
-            result.state
-          );
+            renderHouseStorageManager();
+          } catch (error) {
+            statusLine.textContent =
+              error.message;
+          }
+        };
 
-          inspectorMode =
-            "storage";
-
-          renderHouseStorageManager();
-
-          statusLine.textContent =
-            `${resourceLabel(resourceId)} transfer queued.`;
-        } catch (error) {
-          statusLine.textContent =
-            error.message;
-        }
-      }
-
-      pickupButton.addEventListener(
+      pickup.addEventListener(
         "click",
-        () => {
-          queueTransfer(
-            "to_player"
-          );
-        }
+        () => go("to_player")
       );
 
-      dropButton.addEventListener(
+      drop.addEventListener(
         "click",
-        () => {
-          queueTransfer(
-            "to_house"
-          );
-        }
+        () => go("to_house")
       );
 
       controls.append(
         input,
-        pickupButton,
-        dropButton
+        pickup,
+        drop
       );
 
       card.append(
-        heading,
-        stats,
+        h,
+        p,
         controls
       );
 
@@ -3015,21 +3110,21 @@ if (landGrid) {
       );
     }
 
-    const orderShortcut =
+    const order =
       document.createElement(
         "button"
       );
 
-    orderShortcut.type =
+    order.type =
       "button";
 
-    orderShortcut.className =
+    order.className =
       "interaction-button order-shortcut";
 
-    orderShortcut.textContent =
+    order.textContent =
       "Order Supplies";
 
-    orderShortcut.addEventListener(
+    order.addEventListener(
       "click",
       () => {
         inspectorMode =
@@ -3043,7 +3138,7 @@ if (landGrid) {
     );
 
     inspectorContent.appendChild(
-      orderShortcut
+      order
     );
   }
 
@@ -3059,7 +3154,7 @@ if (landGrid) {
       "contents-message";
 
     intro.textContent =
-      "Orders are currently free and delivered instantly to House Storage. Delivery by outside vendors is abstracted.";
+      "Orders are currently free and delivered instantly to House Storage.";
 
     inspectorContent.appendChild(
       intro
@@ -3067,7 +3162,7 @@ if (landGrid) {
 
     for (
       const [
-        resourceId,
+        id,
         spec,
       ]
       of Object.entries(
@@ -3084,37 +3179,36 @@ if (landGrid) {
       card.className =
         "contents-row order-row";
 
-      const heading =
+      const h =
         document.createElement(
           "h3"
         );
 
-      heading.textContent =
+      h.textContent =
         spec.name ??
-        resourceLabel(
-          resourceId
-        );
+        resourceLabel(id);
 
-      const stats =
+      const p =
         document.createElement(
           "p"
         );
 
-      stats.className =
+      p.className =
         "contents-stats";
 
-      stats.textContent =
+      p.textContent =
         `House Storage: ${formatAmount(
           simulationState
             ?.house
             ?.storage
-            ?.[resourceId] ??
+            ?.[
+              spec.resource_id ??
+              id
+            ] ??
           0
         )} ${
           spec.unit ??
-          resourceUnit(
-            resourceId
-          )
+          resourceUnit(id)
         }`;
 
       const form =
@@ -3133,9 +3227,7 @@ if (landGrid) {
       label.textContent =
         `Quantity (${
           spec.unit ??
-          resourceUnit(
-            resourceId
-          )
+          resourceUnit(id)
         })`;
 
       const input =
@@ -3151,43 +3243,33 @@ if (landGrid) {
           ? "1"
           : "0.1";
 
-      input.value =
-        spec.integer_only
-          ? "1"
-          : "1";
+      input.value = "1";
 
-      label.appendChild(
-        input
-      );
+      label.appendChild(input);
 
-      const button =
+      const b =
         document.createElement(
           "button"
         );
 
-      button.type =
+      b.type =
         "submit";
 
-      button.className =
+      b.className =
         "interaction-button primary";
 
-      button.textContent =
+      b.textContent =
         "Order";
 
       form.append(
         label,
-        button
+        b
       );
 
       form.addEventListener(
         "submit",
-        async (event) => {
-          event.preventDefault();
-
-          const amount =
-            Number(
-              input.value
-            );
+        async (e) => {
+          e.preventDefault();
 
           try {
             const result =
@@ -3201,9 +3283,12 @@ if (landGrid) {
                     JSON.stringify(
                       {
                         resource_id:
-                          resourceId,
+                          id,
 
-                        amount,
+                        amount:
+                          Number(
+                            input.value
+                          ),
                       }
                     ),
                 }
@@ -3213,18 +3298,7 @@ if (landGrid) {
               result.state
             );
 
-            inspectorMode =
-              "order";
-
             renderOrderInterface();
-
-            statusLine.textContent =
-              `${
-                spec.name ??
-                resourceLabel(
-                  resourceId
-                )
-              } delivered to House Storage.`;
           } catch (error) {
             statusLine.textContent =
               error.message;
@@ -3233,8 +3307,8 @@ if (landGrid) {
       );
 
       card.append(
-        heading,
-        stats,
+        h,
+        p,
         form
       );
 
@@ -3244,165 +3318,267 @@ if (landGrid) {
     }
   }
 
-  // ============================================================
-  // Activity queue
-  // ============================================================
+  inspectorCloseButton.addEventListener(
+    "click",
+    () => closeInspector()
+  );
 
-  function taskPhaseLabel(task) {
-    if (!task) {
-      return "Idle";
+  inspectorOverlay.addEventListener(
+    "click",
+    (event) => {
+      if (
+        event.target ===
+        inspectorOverlay
+      ) {
+        closeInspector();
+      }
     }
+  );
 
-    if (
-      task.phase ===
-      "travel"
-    ) {
-      return "Traveling";
+  walkHereButton.addEventListener(
+    "click",
+    async () => {
+      if (!selectedMapObject) {
+        return;
+      }
+
+      try {
+        const result =
+          await api(
+            "/api/player/walk",
+            {
+              method:
+                "POST",
+
+              body:
+                JSON.stringify(
+                  {
+                    column:
+                      selectedMapObject.column,
+
+                    row:
+                      selectedMapObject.row,
+                  }
+                ),
+            }
+          );
+
+        renderState(
+          result.state
+        );
+
+        closeInspector();
+        clearMapSelection();
+
+        statusLine.textContent =
+          "Walk task queued.";
+      } catch (error) {
+        statusLine.textContent =
+          error.message;
+      }
     }
+  );
 
-    if (
-      task.phase ===
-      "working"
-    ) {
-      return "Working";
+  serviceFacilityButton.addEventListener(
+    "click",
+    async () => {
+      const i =
+        selectedMapObject
+          ?.instance;
+
+      if (!i) {
+        return;
+      }
+
+      try {
+        const result =
+          await api(
+            `/api/facilities/${
+              encodeURIComponent(
+                i.instance_id
+              )
+            }/service`,
+            {
+              method:
+                "POST",
+
+              body:
+                "{}",
+            }
+          );
+
+        renderState(
+          result.state
+        );
+
+        closeInspector();
+        clearMapSelection();
+
+        statusLine.textContent =
+          "Service task queued.";
+      } catch (error) {
+        statusLine.textContent =
+          error.message;
+      }
     }
+  );
 
-    if (
-      task.phase ===
-      "queued"
-    ) {
-      return "Queued";
+  manageContentsButton.addEventListener(
+    "click",
+    () => {
+      if (!selectedMapObject) {
+        return;
+      }
+
+      if (
+        selectedMapObject.kind ===
+        "house_storage"
+      ) {
+        inspectorMode =
+          "storage";
+
+        renderHouseStorageManager();
+      } else if (
+        selectedMapObject.kind ===
+        "house"
+      ) {
+        inspectorMode =
+          "contents";
+
+        renderHouseContentsManager(
+          selectedMapObject
+            .focusResourceId
+        );
+      } else {
+        inspectorMode =
+          "contents";
+
+        renderContentsManager(
+          selectedMapObject
+        );
+      }
     }
+  );
 
-    return prettyName(
-      task.phase ??
-      task.status ??
-      "Queued"
-    );
+  function taskPhaseLabel(t) {
+    return t?.phase === "travel"
+      ? "Traveling"
+      : t?.phase === "working"
+        ? "Working"
+        : t?.phase === "queued"
+          ? "Queued"
+          : "Idle";
   }
 
-  function taskTravelMinutes(task) {
-    const target =
-      task?.target;
-
-    const position =
-      simulationState
-        ?.player
-        ?.position;
-
+  function taskTravelMinutes(t) {
     if (
-      !target ||
-      !position ||
-      task.phase !==
+      !t?.target ||
+      t.phase !==
         "travel"
     ) {
       return null;
     }
 
-    const dx =
-      Number(
-        target.column
-      ) -
-      Number(
-        position.column
-      );
+    const p =
+      simulationState
+        ?.player
+        ?.position;
 
-    const dy =
-      Number(
-        target.row
-      ) -
-      Number(
-        position.row
-      );
+    if (!p) {
+      return null;
+    }
 
     return Math.max(
       1,
       Math.ceil(
         Math.hypot(
-          dx,
-          dy
+          Number(
+            t.target.column
+          ) -
+            Number(
+              p.column
+            ),
+
+          Number(
+            t.target.row
+          ) -
+            Number(
+              p.row
+            )
         ) /
-        WALKING_SPEED_TILES_PER_MINUTE
+          WALKING_SPEED_TILES_PER_MINUTE
       )
     );
   }
 
-  function taskDetail(task) {
-    if (!task) {
+  function taskDetail(t) {
+    if (!t) {
       return "No queued tasks";
     }
 
-    const pieces = [
-      taskPhaseLabel(
-        task
-      ),
+    const parts = [
+      taskPhaseLabel(t),
     ];
 
     const travel =
-      taskTravelMinutes(
-        task
-      );
+      taskTravelMinutes(t);
 
     if (
       travel != null
     ) {
-      pieces.push(
+      parts.push(
         `~${travel} min travel`
       );
     }
 
     if (
-      task.phase ===
+      t.phase ===
       "working"
     ) {
-      pieces.push(
+      parts.push(
         `${Number(
-          task.work_minutes_remaining ??
+          t.work_minutes_remaining ??
           0
         )} min work remaining`
       );
     } else if (
       Number(
-        task.work_minutes_remaining ??
+        t.work_minutes_remaining ??
         0
       ) >
       0
     ) {
-      pieces.push(
+      parts.push(
         `${Number(
-          task.work_minutes_remaining
+          t.work_minutes_remaining
         )} min work after arrival`
       );
     }
 
-    return pieces.join(
+    return parts.join(
       " · "
     );
   }
 
-  async function cancelQueuedTask(
-    taskId
-  ) {
+  async function cancelQueuedTask(id) {
     try {
       const result =
         await api(
           `/api/tasks/${
-            encodeURIComponent(
-              taskId
-            )
+            encodeURIComponent(id)
           }/cancel`,
           {
-            method: "POST",
-            body: "{}",
+            method:
+              "POST",
+
+            body:
+              "{}",
           }
         );
 
       renderState(
         result.state
       );
-
-      statusLine.textContent =
-        "Task cancelled; any reserved material was returned to its source.";
     } catch (error) {
       statusLine.textContent =
         error.message;
@@ -3433,30 +3609,28 @@ if (landGrid) {
       currentTaskCard.textContent =
         "Idle · no current task.";
     } else {
-      const strong =
+      const s =
         document.createElement(
           "strong"
         );
 
-      strong.textContent =
+      const d =
+        document.createElement(
+          "span"
+        );
+
+      s.textContent =
         current.description ??
         prettyName(
           current.type
         );
 
-      const detail =
-        document.createElement(
-          "span"
-        );
-
-      detail.textContent =
-        taskDetail(
-          current
-        );
+      d.textContent =
+        taskDetail(current);
 
       currentTaskCard.append(
-        strong,
-        detail
+        s,
+        d
       );
     }
 
@@ -3465,19 +3639,19 @@ if (landGrid) {
     if (
       queue.length <= 1
     ) {
-      const empty =
+      const p =
         document.createElement(
           "p"
         );
 
-      empty.className =
+      p.className =
         "panel-note";
 
-      empty.textContent =
+      p.textContent =
         "No waiting tasks.";
 
       taskQueueList.appendChild(
-        empty
+        p
       );
 
       return;
@@ -3486,7 +3660,7 @@ if (landGrid) {
     queue
       .slice(1)
       .forEach(
-        (task, index) => {
+        (t, index) => {
           const row =
             document.createElement(
               "div"
@@ -3500,60 +3674,57 @@ if (landGrid) {
               "div"
             );
 
-          const strong =
+          const s =
             document.createElement(
               "strong"
             );
 
-          strong.textContent =
-            `${index + 1}. ${
-              task.description ??
-              prettyName(
-                task.type
-              )
-            }`;
-
-          const detail =
+          const d =
             document.createElement(
               "span"
             );
 
-          detail.textContent =
-            taskDetail(
-              task
-            );
+          s.textContent =
+            `${index + 1}. ${
+              t.description ??
+              prettyName(
+                t.type
+              )
+            }`;
+
+          d.textContent =
+            taskDetail(t);
 
           text.append(
-            strong,
-            detail
+            s,
+            d
           );
 
-          const cancel =
+          const b =
             document.createElement(
               "button"
             );
 
-          cancel.type =
+          b.type =
             "button";
 
-          cancel.className =
+          b.className =
             "task-cancel-button";
 
-          cancel.textContent =
+          b.textContent =
             "Cancel";
 
-          cancel.addEventListener(
+          b.addEventListener(
             "click",
-            () => {
+            () =>
               cancelQueuedTask(
-                task.task_id
-              );
-            }
+                t.task_id
+              )
           );
 
           row.append(
             text,
-            cancel
+            b
           );
 
           taskQueueList.appendChild(
@@ -3562,10 +3733,6 @@ if (landGrid) {
         }
       );
   }
-
-  // ============================================================
-  // Avatar
-  // ============================================================
 
   function ensureAvatar() {
     if (avatar) {
@@ -3689,65 +3856,55 @@ if (landGrid) {
       queue[0] ??
       null;
 
-    if (!current) {
-      avatarTooltip.innerHTML =
-        "<strong>Homesteader</strong><span>Idle</span><span>No queued tasks</span>";
-
-      return;
-    }
-
     avatarTooltip.replaceChildren();
 
-    const title =
-      document.createElement(
-        "strong"
+    const lines =
+      current
+        ? [
+            "Homesteader",
+
+            current.description ??
+              prettyName(
+                current.type
+              ),
+
+            taskDetail(current),
+
+            `${Math.max(
+              0,
+              queue.length - 1
+            )} task${
+              queue.length - 1 === 1
+                ? ""
+                : "s"
+            } waiting`,
+          ]
+        : [
+            "Homesteader",
+            "Idle",
+            "No queued tasks",
+          ];
+
+    for (
+      const text
+      of lines
+    ) {
+      const el =
+        text === "Homesteader"
+          ? document.createElement(
+              "strong"
+            )
+          : document.createElement(
+              "span"
+            );
+
+      el.textContent =
+        text;
+
+      avatarTooltip.appendChild(
+        el
       );
-
-    title.textContent =
-      "Homesteader";
-
-    const description =
-      document.createElement(
-        "span"
-      );
-
-    description.textContent =
-      current.description ??
-      prettyName(
-        current.type
-      );
-
-    const detail =
-      document.createElement(
-        "span"
-      );
-
-    detail.textContent =
-      taskDetail(
-        current
-      );
-
-    const waiting =
-      document.createElement(
-        "span"
-      );
-
-    waiting.textContent =
-      `${Math.max(
-        0,
-        queue.length - 1
-      )} task${
-        queue.length - 1 === 1
-          ? ""
-          : "s"
-      } waiting`;
-
-    avatarTooltip.append(
-      title,
-      description,
-      detail,
-      waiting
-    );
+    }
   }
 
   function renderAvatar(
@@ -3766,7 +3923,7 @@ if (landGrid) {
       return;
     }
 
-    const element =
+    const el =
       ensureAvatar();
 
     const column =
@@ -3783,30 +3940,6 @@ if (landGrid) {
         GRID_SIZE - 1
       );
 
-    element.style.left =
-      `${
-        (
-          (
-            column +
-            0.5
-          ) /
-          GRID_SIZE
-        ) *
-        100
-      }%`;
-
-    element.style.top =
-      `${
-        (
-          (
-            row +
-            1
-          ) /
-          GRID_SIZE
-        ) *
-        100
-      }%`;
-
     const task =
       player
         .task_queue
@@ -3820,13 +3953,37 @@ if (landGrid) {
       player.last_direction ??
       "down";
 
-    element.src =
+    el.style.left =
+      `${
+        (
+          (
+            column +
+            0.5
+          ) /
+          GRID_SIZE
+        ) *
+        100
+      }%`;
+
+    el.style.top =
+      `${
+        (
+          (
+            row +
+            1
+          ) /
+          GRID_SIZE
+        ) *
+        100
+      }%`;
+
+    el.src =
       avatarAsset(
         task,
         activity
       );
 
-    element.classList.toggle(
+    el.classList.toggle(
       "walk-left",
       (
         activity?.phase ??
@@ -3837,31 +3994,16 @@ if (landGrid) {
         "left"
     );
 
-    element.title =
-      task
-        ? `${
-            task.description
-          }\n${
-            taskDetail(
-              task
-            )
-          }`
-        : "Homesteader — Idle";
-
     if (avatarTooltip) {
       avatarTooltip.style.left =
-        element.style.left;
+        el.style.left;
 
       avatarTooltip.style.top =
-        element.style.top;
+        el.style.top;
 
       updateAvatarTooltip();
     }
   }
-
-  // ============================================================
-  // House and facility rendering
-  // ============================================================
 
   function renderHouse() {
     landGrid
@@ -3869,9 +4011,7 @@ if (landGrid) {
         ".house-eaves, .house-pickup, .house-storage"
       )
       .forEach(
-        (element) => {
-          element.remove();
-        }
+        (e) => e.remove()
       );
 
     const house =
@@ -3881,122 +4021,110 @@ if (landGrid) {
       return;
     }
 
-    const eaves =
+    const e =
       house.eaves ??
       {
         column: 11,
         width: 20,
       };
 
-    const eavesElement =
+    const eaves =
       document.createElement(
         "div"
       );
 
-    eavesElement.className =
+    eaves.className =
       "house-eaves";
 
-    eavesElement.style.gridColumn =
-      `${Number(eaves.column) + 1} / span ${Number(eaves.width)}`;
+    eaves.style.gridColumn =
+      `${Number(e.column) + 1} / span ${Number(e.width)}`;
 
-    eavesElement.style.gridRow =
+    eaves.style.gridRow =
       `${GRID_SIZE} / span 1`;
 
     landGrid.appendChild(
-      eavesElement
+      eaves
     );
-
-    const pickupSpecs = [
-      [
-        "kitchen_waste",
-        "Kitchen waste",
-        "kitchen-pickup",
-      ],
-
-      [
-        "paper_waste",
-        "Paper waste",
-        "paper-pickup",
-      ],
-    ];
 
     for (
       const [
-        resourceId,
-        text,
-        extraClass,
+        id,
+        label,
+        klass,
       ]
-      of pickupSpecs
+      of [
+        [
+          "kitchen_waste",
+          "Kitchen waste",
+          "kitchen-pickup",
+        ],
+
+        [
+          "carbonaceous_plant_waste",
+          "Paper waste / browns",
+          "paper-pickup",
+        ],
+      ]
     ) {
-      const point =
+      const p =
         house
           .pickup_points
-          ?.[resourceId];
+          ?.[id];
 
-      if (!point) {
+      if (!p) {
         continue;
       }
 
-      const button =
+      const b =
         document.createElement(
           "button"
         );
 
-      button.type =
-        "button";
+      b.type = "button";
 
-      button.className =
-        `house-pickup ${extraClass}`;
+      b.className =
+        `house-pickup ${klass}`;
 
-      button.dataset.resourceId =
-        resourceId;
+      b.dataset.resourceId =
+        id;
 
-      button.style.gridColumn =
+      b.style.gridColumn =
         `${
           Math.floor(
-            Number(
-              point.column
-            )
+            Number(p.column)
           ) +
           1
         } / span 2`;
 
-      button.style.gridRow =
+      b.style.gridRow =
         `${
           Math.floor(
-            Number(
-              point.row
-            )
+            Number(p.row)
           ) +
           1
         } / span 2`;
 
-      const amount =
-        Number(
-          house.outputs
-            ?.[resourceId] ??
-          0
-        );
-
-      button.innerHTML =
+      b.innerHTML =
         `<span class="pickup-icon">${
-          resourceId ===
+          id ===
             "kitchen_waste"
             ? "♻"
             : "▤"
         }</span>` +
-        `<span>${text}</span>` +
+        `<span>${label}</span>` +
         `<strong>${formatAmount(
-          amount,
+          house.outputs
+            ?.[id] ??
+          0,
           2
         )} lb</strong>`;
 
       landGrid.appendChild(
-        button
+        b
       );
     }
 
-    const point =
+    const p =
       house.storage_point ??
       {
         column: 20,
@@ -4017,9 +4145,7 @@ if (landGrid) {
     storage.style.gridColumn =
       `${
         Math.floor(
-          Number(
-            point.column
-          )
+          Number(p.column)
         ) +
         1
       } / span 3`;
@@ -4027,30 +4153,26 @@ if (landGrid) {
     storage.style.gridRow =
       `${
         Math.floor(
-          Number(
-            point.row
-          )
+          Number(p.row)
         ) +
         1
       } / span 2`;
 
-    const storedTypes =
+    const count =
       Object.values(
         house.storage ??
         {}
-      )
-        .filter(
-          (amount) =>
-            Number(amount) >
-            1e-9
-        )
-        .length;
+      ).filter(
+        (v) =>
+          Number(v) >
+          1e-9
+      ).length;
 
     storage.innerHTML =
       `<span class="pickup-icon">▣</span>` +
       `<span>House Storage</span>` +
-      `<strong>${storedTypes} type${
-        storedTypes === 1
+      `<strong>${count} type${
+        count === 1
           ? ""
           : "s"
       }</strong>`;
@@ -4066,9 +4188,7 @@ if (landGrid) {
         ".placed-building"
       )
       .forEach(
-        (element) => {
-          element.remove();
-        }
+        (e) => e.remove()
       );
 
     placements =
@@ -4076,23 +4196,22 @@ if (landGrid) {
         simulationState
           ?.instances ??
         []
-      )
-        .map(
-          (instance) => ({
-            ...instance,
-          })
-        );
+      ).map(
+        (i) => ({
+          ...i,
+        })
+      );
 
     for (
-      const instance
+      const i
       of placements
     ) {
-      const definition =
+      const d =
         definitionsById.get(
-          instance.facility_id
+          i.facility_id
         );
 
-      if (!definition) {
+      if (!d) {
         continue;
       }
 
@@ -4105,19 +4224,19 @@ if (landGrid) {
         "building-sprite placed-building";
 
       image.src =
-        `/static/assets/sprites/${definition.image}`;
+        `/static/assets/sprites/${d.image}`;
 
       image.alt =
-        definition.name;
+        d.name;
 
       image.dataset.instanceId =
-        instance.instance_id;
+        i.instance_id;
 
       image.style.gridColumn =
-        `${instance.column + 1} / span ${instance.width}`;
+        `${i.column + 1} / span ${i.width}`;
 
       image.style.gridRow =
-        `${instance.row + 1} / span ${instance.height}`;
+        `${i.row + 1} / span ${i.height}`;
 
       landGrid.appendChild(
         image
@@ -4139,41 +4258,31 @@ if (landGrid) {
     }
   }
 
-  // ============================================================
-  // Side panels
-  // ============================================================
-
   function dailyBaseline() {
-    const baseline =
+    const b =
       simulationState
         ?.household_baseline_daily ??
       {};
 
-    const profile =
+    const p =
       simulationState
         ?.household_profile ??
       {};
 
     return {
       flows:
-        baseline.daily_flows ??
-        profile.daily_flows ??
+        b.daily_flows ??
+        p.daily_flows ??
         {},
 
       electricity:
-        baseline
-          .electricity_kwh_per_day ??
-        profile
-          .electricity_kwh_per_day ??
+        b.electricity_kwh_per_day ??
+        p.electricity_kwh_per_day ??
         {},
     };
   }
 
   function renderPlayerInventory() {
-    if (!playerInventoryList) {
-      return;
-    }
-
     playerInventoryList.replaceChildren();
 
     const entries =
@@ -4184,8 +4293,8 @@ if (landGrid) {
         {}
       )
         .filter(
-          ([, amount]) =>
-            Number(amount) >
+          ([, v]) =>
+            Number(v) >
             1e-9
         )
         .sort(
@@ -4197,16 +4306,16 @@ if (landGrid) {
         );
 
     if (!entries.length) {
-      const item =
+      const li =
         document.createElement(
           "li"
         );
 
-      item.textContent =
+      li.textContent =
         "Nothing carried.";
 
       playerInventoryList.appendChild(
-        item
+        li
       );
 
       return;
@@ -4214,17 +4323,163 @@ if (landGrid) {
 
     for (
       const [
-        resourceId,
+        id,
         amount,
       ]
       of entries
     ) {
       addListItem(
         playerInventoryList,
-        resourceLabel(
-          resourceId
-        ),
-        `${formatAmount(amount)} ${resourceUnit(resourceId)}`
+        resourceLabel(id),
+        `${formatAmount(
+          amount,
+          isDiscrete(id)
+            ? 0
+            : 4
+        )} ${resourceUnit(id)}`
+      );
+    }
+  }
+
+  function renderResourceOverview() {
+    biologicalResourceList
+      ?.replaceChildren();
+
+    utilityResourceList
+      ?.replaceChildren();
+
+    const overview =
+      simulationState
+        ?.resource_overview ??
+      {};
+
+    for (
+      const [
+        id,
+        r,
+      ]
+      of Object.entries(
+        overview.biological_materials ??
+        {}
+      ).sort(
+        ([, a], [, b]) =>
+          String(a.name)
+            .localeCompare(
+              String(b.name)
+            )
+      )
+    ) {
+      if (
+        r.behavior !==
+          "stock" ||
+        Number(
+          r.amount ??
+          0
+        ) <=
+          1e-9
+      ) {
+        continue;
+      }
+
+      addListItem(
+        biologicalResourceList,
+        r.name ??
+          resourceLabel(id),
+
+        `${formatAmount(
+          r.amount,
+          r.quantity_mode ===
+            "discrete"
+            ? 0
+            : 4
+        )} ${
+          r.unit ??
+          ""
+        }`.trim()
+      );
+    }
+
+    if (
+      biologicalResourceList &&
+      !biologicalResourceList.children.length
+    ) {
+      const li =
+        document.createElement(
+          "li"
+        );
+
+      li.textContent =
+        "No physical stocks yet.";
+
+      biologicalResourceList.appendChild(
+        li
+      );
+    }
+
+    const u =
+      overview.utilities ??
+      {};
+
+    const e =
+      u.electricity_balance;
+
+    if (e) {
+      addListItem(
+        utilityResourceList,
+        "Electricity demand",
+        `${formatAmount(
+          e.demand
+        )} kWh/h`
+      );
+
+      addListItem(
+        utilityResourceList,
+        "On-site generation",
+        `${formatAmount(
+          e.onsite_generation
+        )} kWh/h`
+      );
+
+      addListItem(
+        utilityResourceList,
+        "Grid requirement",
+        `${formatAmount(
+          e.grid_requirement
+        )} kWh/h`
+      );
+    }
+
+    if (
+      u.municipal_water
+    ) {
+      addListItem(
+        utilityResourceList,
+        u.municipal_water
+          .name ??
+          "Municipal potable water",
+
+        `${formatAmount(
+          u.municipal_water
+            .amount
+        )} gal/h`
+      );
+    }
+
+    const np =
+      overview.utilities
+        ?.non_potable_water;
+
+    if (np) {
+      addListItem(
+        utilityResourceList,
+        np.name,
+
+        `${formatAmount(
+          np.amount
+        )} ${
+          np.unit ??
+          ""
+        }`.trim()
       );
     }
   }
@@ -4246,8 +4501,8 @@ if (landGrid) {
       householdList,
       "Profile",
       profile.name ??
-      profile.profile_id ??
-      "Default household"
+        profile.profile_id ??
+        "Default household"
     );
 
     addListItem(
@@ -4303,21 +4558,19 @@ if (landGrid) {
         )}`
       );
 
-      const task =
-        player
-          .task_queue
-          ?.[0] ??
-        null;
-
       addListItem(
         playerList,
         "Activity",
-        task
+        player.task_queue
+          ?.[0]
           ? `${
-              task.description
+              player
+                .task_queue[0]
+                .description
             } — ${
               taskPhaseLabel(
-                task
+                player
+                  .task_queue[0]
               )
             }`
           : "Idle"
@@ -4336,8 +4589,8 @@ if (landGrid) {
     }
 
     renderPlayerInventory();
-
     renderTaskQueue();
+    renderResourceOverview();
 
     const {
       flows,
@@ -4399,10 +4652,10 @@ if (landGrid) {
       ) {
         addListItem(
           electricityList,
-          prettyName(
-            key
-          ),
-          `${formatAmount(value)} kWh / day`
+          prettyName(key),
+          `${formatAmount(
+            value
+          )} kWh / day`
         );
       }
     }
@@ -4424,10 +4677,10 @@ if (landGrid) {
       )
     ) {
       if (
-        key ===
-          "groceries_usd" ||
-        key ===
-          "tap_water_gal"
+        [
+          "groceries_usd",
+          "tap_water_gal",
+        ].includes(key)
       ) {
         continue;
       }
@@ -4451,42 +4704,9 @@ if (landGrid) {
             ""
           )
         ),
-        `${formatAmount(value)} ${unit}`
-      );
-    }
-
-    const resourceList =
-      document.getElementById(
-        "resource-list"
-      );
-
-    resourceList.replaceChildren();
-
-    for (
-      const [
-        resourceId,
-        resource,
-      ]
-      of Object.entries(
-        simulationState
-          ?.resources ??
-        {}
-      )
-    ) {
-      addListItem(
-        resourceList,
-        resource.name ??
-        prettyName(
-          resourceId
-        ),
-        `${
-          formatAmount(
-            resource.amount
-          )
-        } ${
-          resource.unit ??
-          ""
-        }`.trim()
+        `${formatAmount(
+          value
+        )} ${unit}`
       );
     }
 
@@ -4498,35 +4718,40 @@ if (landGrid) {
     operationsList.replaceChildren();
 
     if (!placements.length) {
-      const item =
+      const li =
         document.createElement(
           "li"
         );
 
-      item.textContent =
+      li.textContent =
         "No placed facilities.";
 
       operationsList.appendChild(
-        item
+        li
       );
     } else {
       for (
-        const instance
+        const i
         of placements
       ) {
-        const definition =
+        const d =
           definitionsById.get(
-            instance.facility_id
+            i.facility_id
           );
+
+        const label =
+          i.facility_id ===
+            "compost-pile"
+            ? compostStatus(i)
+            : i.last_operation
+                ?.status ??
+              "Awaiting first hourly tick";
 
         addListItem(
           operationsList,
-          definition?.name ??
-          instance.facility_id,
-          instance
-            .last_operation
-            ?.status ??
-          "Awaiting first hourly tick"
+          d?.name ??
+            i.facility_id,
+          label
         );
       }
     }
@@ -4552,10 +4777,8 @@ if (landGrid) {
         "contents"
       ) {
         renderHouseContentsManager(
-          selectedMapObject,
           selectedMapObject
-            .focusResourceId ??
-            null
+            .focusResourceId
         );
       } else {
         renderSelectionSummary(
@@ -4585,22 +4808,19 @@ if (landGrid) {
       return;
     }
 
-    const refreshedInstance =
+    const i =
       facilityAt(
-        selectedMapObject
-          .column,
-        selectedMapObject
-          .row
+        selectedMapObject.column,
+        selectedMapObject.row
       );
 
     selectedMapObject.instance =
-      refreshedInstance;
+      i;
 
     selectedMapObject.definition =
-      refreshedInstance
+      i
         ? definitionsById.get(
-            refreshedInstance
-              .facility_id
+            i.facility_id
           )
         : definitionsById.get(
             simulationState
@@ -4622,13 +4842,12 @@ if (landGrid) {
     }
 
     serviceFacilityButton.disabled =
-      !refreshedInstance ||
+      !i ||
       Number(
-        refreshedInstance
-          .accrued_labor_requirement ??
+        i.accrued_labor_requirement ??
         0
       ) <=
-      1e-9;
+        1e-9;
   }
 
   function renderState(
@@ -4640,37 +4859,24 @@ if (landGrid) {
     definitionsById.clear();
 
     for (
-      const definition
+      const d
       of state
         ?.facility_definitions ??
       []
     ) {
       definitionsById.set(
-        definition.id,
-        definition
+        d.id,
+        d
       );
     }
 
-    setDateAndClock(
-      state
-    );
-
+    setDateAndClock(state);
     renderBuildList();
-
     renderPlacements();
-
     refreshOpenInspector();
-
-    renderAvatar(
-      activity
-    );
-
+    renderAvatar(activity);
     renderHouseholdPanels();
   }
-
-  // ============================================================
-  // Map pointer behavior
-  // ============================================================
 
   landGrid.addEventListener(
     "pointermove",
@@ -4682,18 +4888,15 @@ if (landGrid) {
         return;
       }
 
-      const {
-        column,
-        row,
-      } =
+      const p =
         mapCoordinatesFromClient(
           event.clientX,
           event.clientY
         );
 
       showPreview(
-        column,
-        row
+        p.column,
+        p.row
       );
     }
   );
@@ -4701,9 +4904,7 @@ if (landGrid) {
   landGrid.addEventListener(
     "pointerleave",
     () => {
-      if (
-        selectedBuildId
-      ) {
+      if (selectedBuildId) {
         removePreview();
       }
     }
@@ -4734,30 +4935,24 @@ if (landGrid) {
           event.clientY
         );
 
-      const clickedPickup =
+      const pickup =
         event.target.closest
-          ?.(".house-pickup") ??
-        null;
+          ?.(".house-pickup");
 
-      const clickedStorage =
+      const storage =
         event.target.closest
-          ?.(".house-storage") ??
-        null;
+          ?.(".house-storage");
 
-      const clickedEaves =
+      const eaves =
         event.target.closest
-          ?.(".house-eaves") ??
-        null;
+          ?.(".house-eaves");
 
-      const clickedFacility =
+      const facility =
         event.target.closest
-          ?.(".placed-building") ??
-        null;
+          ?.(".placed-building");
 
-      if (clickedStorage) {
-        if (
-          selectedBuildId
-        ) {
+      if (storage) {
+        if (selectedBuildId) {
           cancelPlacement(
             {
               silent: true,
@@ -4772,10 +4967,8 @@ if (landGrid) {
         return;
       }
 
-      if (clickedPickup) {
-        if (
-          selectedBuildId
-        ) {
+      if (pickup) {
+        if (selectedBuildId) {
           cancelPlacement(
             {
               silent: true,
@@ -4784,19 +4977,15 @@ if (landGrid) {
         }
 
         openHouseSelection(
-          clickedPickup
-            .dataset
-            .resourceId ??
-            null
+          pickup.dataset
+            .resourceId
         );
 
         return;
       }
 
-      if (clickedEaves) {
-        if (
-          selectedBuildId
-        ) {
+      if (eaves) {
+        if (selectedBuildId) {
           cancelPlacement(
             {
               silent: true,
@@ -4809,10 +4998,8 @@ if (landGrid) {
         return;
       }
 
-      if (clickedFacility) {
-        if (
-          selectedBuildId
-        ) {
+      if (facility) {
+        if (selectedBuildId) {
           cancelPlacement(
             {
               silent: true,
@@ -4828,9 +5015,7 @@ if (landGrid) {
         return;
       }
 
-      if (
-        selectedBuildId
-      ) {
+      if (selectedBuildId) {
         await placeSelectedFacility(
           column,
           row
@@ -4846,16 +5031,13 @@ if (landGrid) {
     }
   );
 
-  // ============================================================
-  // Top controls
-  // ============================================================
-
   gameSpeedSelect
     ?.addEventListener(
       "change",
       () => {
         if (
-          runtimeTimer !== null &&
+          runtimeTimer !==
+            null &&
           !interactionOpen
         ) {
           setRuntimeRunning(
@@ -4899,29 +5081,24 @@ if (landGrid) {
       }
     );
 
-  // ============================================================
-  // Tabs
-  // ============================================================
-
   infoTabs.forEach(
-    (tab) => {
+    (tab) =>
       tab.addEventListener(
         "click",
         () => {
           infoTabs.forEach(
-            (candidate) => {
-              const active =
-                candidate ===
-                tab;
+            (t) => {
+              const a =
+                t === tab;
 
-              candidate.classList.toggle(
+              t.classList.toggle(
                 "is-active",
-                active
+                a
               );
 
-              candidate.setAttribute(
+              t.setAttribute(
                 "aria-selected",
-                active
+                a
                   ? "true"
                   : "false"
               );
@@ -4929,23 +5106,22 @@ if (landGrid) {
           );
 
           infoPanels.forEach(
-            (panel) => {
-              const active =
-                panel.id ===
+            (p) => {
+              const a =
+                p.id ===
                 tab.dataset.panel;
 
-              panel.hidden =
-                !active;
+              p.hidden =
+                !a;
 
-              panel.classList.toggle(
+              p.classList.toggle(
                 "is-active",
-                active
+                a
               );
             }
           );
         }
-      );
-    }
+      )
   );
 
   document.addEventListener(
@@ -4956,9 +5132,7 @@ if (landGrid) {
         "Escape"
       ) {
         closeInspector();
-
         clearMapSelection();
-
         cancelPlacement();
       }
 
@@ -5003,10 +5177,6 @@ if (landGrid) {
     }
   );
 
-  // ============================================================
-  // Startup
-  // ============================================================
-
   function setGameLoaded(
     name,
     state
@@ -5023,9 +5193,7 @@ if (landGrid) {
     startupStatus.textContent =
       "";
 
-    renderState(
-      state
-    );
+    renderState(state);
 
     statusLine.textContent =
       "Select a tile or facility to interact.";
@@ -5044,18 +5212,21 @@ if (landGrid) {
       true;
 
     try {
-      const result =
+      const r =
         await api(
           "/api/new-game",
           {
-            method: "POST",
-            body: "{}",
+            method:
+              "POST",
+
+            body:
+              "{}",
           }
         );
 
       setGameLoaded(
-        result.game_name,
-        result.state
+        r.game_name,
+        r.state
       );
     } catch (error) {
       startupStatus.textContent =
@@ -5082,43 +5253,42 @@ if (landGrid) {
     saveGameList.replaceChildren();
 
     try {
-      const result =
+      const r =
         await api(
           "/api/saves"
         );
 
       if (
-        !result.saves
-          ?.length
+        !r.saves?.length
       ) {
-        const message =
+        const p =
           document.createElement(
             "p"
           );
 
-        message.className =
+        p.className =
           "no-saves-message";
 
-        message.textContent =
+        p.textContent =
           "No saved games found.";
 
         saveGameList.appendChild(
-          message
+          p
         );
       } else {
         for (
           const save
-          of result.saves
+          of r.saves
         ) {
-          const button =
+          const b =
             document.createElement(
               "button"
             );
 
-          button.type =
+          b.type =
             "button";
 
-          button.className =
+          b.className =
             "save-game-option";
 
           const strong =
@@ -5126,33 +5296,32 @@ if (landGrid) {
               "strong"
             );
 
-          strong.textContent =
-            save.label;
-
           const small =
             document.createElement(
               "small"
             );
 
+          strong.textContent =
+            save.label;
+
           small.textContent =
             save.path;
 
-          button.append(
+          b.append(
             strong,
             small
           );
 
-          button.addEventListener(
+          b.addEventListener(
             "click",
-            () => {
+            () =>
               loadSavedGame(
                 save.id
-              );
-            }
+              )
           );
 
           saveGameList.appendChild(
-            button
+            b
           );
         }
       }
@@ -5165,32 +5334,31 @@ if (landGrid) {
     }
   }
 
-  async function loadSavedGame(
-    saveId
-  ) {
+  async function loadSavedGame(id) {
     startupStatus.textContent =
       "Loading game…";
 
     try {
-      const result =
+      const r =
         await api(
           "/api/load-game",
           {
-            method: "POST",
+            method:
+              "POST",
 
             body:
               JSON.stringify(
                 {
                   save_id:
-                    saveId,
+                    id,
                 }
               ),
           }
         );
 
       setGameLoaded(
-        result.game_name,
-        result.state
+        r.game_name,
+        r.state
       );
     } catch (error) {
       startupStatus.textContent =
@@ -5230,13 +5398,13 @@ if (landGrid) {
     );
 
     try {
-      const session =
+      const s =
         await api(
           "/api/session"
         );
 
       if (
-        session.game_loaded
+        s.game_loaded
       ) {
         const state =
           await api(
@@ -5244,7 +5412,7 @@ if (landGrid) {
           );
 
         setGameLoaded(
-          session.game_name,
+          s.game_name,
           state
         );
       }

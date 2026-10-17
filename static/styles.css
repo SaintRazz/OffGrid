@@ -177,7 +177,6 @@ body {
   height: 100%;
   background: var(--land);
   transform-origin: 0 0;
-  will-change: transform;
   user-select: none;
 }
 
@@ -1384,4 +1383,43 @@ body {
 
 .player-task-tooltip strong {
   font-size: 1.05em;
+}
+
+/* Resource overview and compost-process additions */
+.resource-section + .resource-section {
+  margin-top: 1rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid rgba(35, 55, 43, 0.16);
+}
+
+.resource-section h4 {
+  margin: 0 0 0.45rem;
+}
+
+.compost-state-note,
+.carbon-balance-note {
+  margin: 0.55rem 0;
+  padding: 0.55rem 0.65rem;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.56);
+  line-height: 1.35;
+}
+
+.compost-pools {
+  display: grid;
+  gap: 0.35rem;
+  margin: 0.65rem 0;
+}
+
+.compost-pool-row {
+  display: grid;
+  grid-template-columns: minmax(8.5rem, 1fr) minmax(4rem, auto);
+  gap: 0.5rem;
+  align-items: baseline;
+}
+
+.output-collection-row {
+  margin-top: 0.7rem;
+  padding-top: 0.7rem;
+  border-top: 1px solid rgba(35, 55, 43, 0.14);
 }
