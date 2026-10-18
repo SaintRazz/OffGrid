@@ -1,5 +1,5 @@
 {
-  "schema_version": "0.7",
+  "schema_version": "0.8",
   "time": {
     "day": 1,
     "hour": 8,
@@ -7,7 +7,9 @@
   },
   "household": {
     "money": 10000.0,
-    "labor_available_hours": 4.0
+    "labor_available_hours": 4.0,
+    "grocery_credit_usd": 0.0,
+    "cumulative_grocery_savings_usd": 0.0
   },
   "inventories": {
     "feed": 0.0,
@@ -20,13 +22,17 @@
     "chicken": 0.0,
     "bsfl_biomass": 0.0,
     "carbonaceous_plant_waste": 0.0,
-    "active_compost": 0.0
+    "active_compost": 0.0,
+    "green_forage": 0.0
   },
   "current_flows": {
     "electricity_generated_this_tick_kwh": 0.0,
     "electricity_consumed_this_tick_kwh": 0.0,
     "grid_electricity_this_tick_kwh": 0.0,
-    "municipal_water_this_tick_gal": 0.0
+    "municipal_water_this_tick_gal": 0.0,
+    "groceries_baseline_this_tick_usd": 0.0,
+    "grocery_credit_applied_this_tick_usd": 0.0,
+    "groceries_net_this_tick_usd": 0.0
   },
   "map": {
     "tile_size_ft": 5,
@@ -59,11 +65,15 @@
     "pickup_points": {
       "kitchen_waste": {
         "column": 13.0,
-        "row": 40.0
+        "row": 40.0,
+        "width": 1,
+        "height": 1
       },
       "carbonaceous_plant_waste": {
         "column": 16.0,
-        "row": 40.0
+        "row": 40.0,
+        "width": 1,
+        "height": 1
       }
     },
     "entrance": {
@@ -76,12 +86,18 @@
     },
     "storage_point": {
       "column": 20.0,
-      "row": 40.0
+      "row": 40.0,
+      "width": 2,
+      "height": 2
     },
     "storage": {
       "feed": 0.0,
       "chicken": 0.0,
       "bsfl_biomass": 0.0
     }
+  },
+  "yard_resources": {
+    "insect_forage": 0.0,
+    "green_forage": 0.0
   }
 }

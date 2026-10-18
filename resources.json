@@ -73,7 +73,17 @@
       "initial_stock": 0.0,
       "category": "biological_materials",
       "behavior": "stock",
-      "quantity_mode": "continuous"
+      "quantity_mode": "continuous",
+      "notes": "Physical insect forage such as collected BSFL can be stored and moved; naturally occurring yard insect forage is tracked separately in game-state yard_resources."
+    },
+    "green_forage": {
+      "name": "Green forage",
+      "unit": "lb",
+      "initial_stock": 0.0,
+      "category": "biological_materials",
+      "behavior": "stock",
+      "quantity_mode": "continuous",
+      "notes": "Soft edible vegetation, tender shoots, weeds, seed heads, and similar yard forage. Environmental availability is tracked in game-state yard_resources."
     },
     "compost": {
       "name": "Compost",

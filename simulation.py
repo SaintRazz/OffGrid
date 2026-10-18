@@ -9,6 +9,8 @@ HOURS_PER_DAY = 24
 MINUTES_PER_HOUR = 60
 HOURS_PER_YEAR = 365 * HOURS_PER_DAY
 WALKING_SPEED_FT_PER_MINUTE = 264.0
+YARD_FORAGE_CAP_DAYS = 3.0
+EGG_GROCERY_VALUE_USD = 0.20
 
 ORDER_CATALOG = {
     "feed": {
@@ -120,13 +122,18 @@ class Simulation:
         """
         self.game_state.setdefault("schema_version", "0.1")
         self.game_state.setdefault("time", {"day": 1, "hour": 0, "minute": 0})
-        self.game_state.setdefault("household", {})
+        household_state = self.game_state.setdefault("household", {})
+        household_state.setdefault("grocery_credit_usd", 0.0)
+        household_state.setdefault("cumulative_grocery_savings_usd", 0.0)
         self.game_state.setdefault(
             "household_profile_id",
             self.household_profile.get("profile_id", "default-household"),
         )
         self.game_state.setdefault("house_upgrades", {})
         self.game_state.setdefault("inventories", {})
+        yard_resources = self.game_state.setdefault("yard_resources", {})
+        yard_resources.setdefault("insect_forage", 0.0)
+        yard_resources.setdefault("green_forage", 0.0)
         self.game_state.setdefault("current_flows", {})
         self.game_state.setdefault("map", {})
         self.game_state.setdefault("tile_states", [])
@@ -156,6 +163,8 @@ class Simulation:
         kitchen_pickup = pickup_points.setdefault("kitchen_waste", {})
         kitchen_pickup.setdefault("column", 13.0)
         kitchen_pickup.setdefault("row", 40.0)
+        kitchen_pickup.setdefault("width", 1)
+        kitchen_pickup.setdefault("height", 1)
         legacy_paper_pickup = pickup_points.pop("paper_waste", None)
         carbon_pickup = pickup_points.setdefault(
             "carbonaceous_plant_waste",
@@ -163,6 +172,8 @@ class Simulation:
         )
         carbon_pickup.setdefault("column", 16.0)
         carbon_pickup.setdefault("row", 40.0)
+        carbon_pickup.setdefault("width", 1)
+        carbon_pickup.setdefault("height", 1)
         entrance = house.setdefault("entrance", {})
         entrance.setdefault("column", 14.5)
         entrance.setdefault("row", 40.0)
@@ -176,6 +187,8 @@ class Simulation:
         storage_point = house.setdefault("storage_point", {})
         storage_point.setdefault("column", 20.0)
         storage_point.setdefault("row", 40.0)
+        storage_point.setdefault("width", 2)
+        storage_point.setdefault("height", 2)
         house.setdefault("storage", {})
 
         # Resource-id migrations from earlier saves.  Paper waste and dry
@@ -195,6 +208,14 @@ class Simulation:
                 old_amount = max(0.0, float(mapping.pop(old_id, 0.0)))
                 if old_amount > 0:
                     mapping[new_id] = max(0.0, float(mapping.get(new_id, 0.0))) + old_amount
+
+        # Before yard_resources existed, unimproved grass accumulated insect
+        # forage in the compatibility/global inventory. Move that legacy pool
+        # into the environmental yard pool. Facility-produced/collected BSFL
+        # never uses this global inventory path and remains physical stock.
+        legacy_yard_insects = max(0.0, float(self.game_state["inventories"].pop("insect_forage", 0.0)))
+        if legacy_yard_insects > 0:
+            yard_resources["insect_forage"] = max(0.0, float(yard_resources.get("insect_forage", 0.0))) + legacy_yard_insects
 
         player = self.game_state.setdefault("player", {})
         player.setdefault("name", "Homesteader")
@@ -229,6 +250,23 @@ class Simulation:
 
         for instance in self.game_state["facilities"]:
             self._normalize_instance(instance)
+
+        # Older builds abstracted coop egg production into the global
+        # inventory, sometimes as fractional eggs. Put those eggs back at the
+        # first coop so whole eggs are collectible and the fractional part can
+        # continue through the normal production remainder.
+        legacy_eggs = max(0.0, float(self.game_state["inventories"].pop("eggs", 0.0)))
+        if legacy_eggs > 0:
+            coop = next((i for i in self.game_state["facilities"] if i.get("facility_id") == "chicken-coop"), None)
+            if coop is not None:
+                whole = math.floor(legacy_eggs + 1e-9)
+                fraction = max(0.0, legacy_eggs - whole)
+                outputs = coop.setdefault("stored_outputs", {})
+                outputs["eggs"] = max(0.0, float(outputs.get("eggs", 0.0))) + whole
+                remainders = coop.setdefault("production_remainders", {})
+                remainders["eggs"] = max(0.0, float(remainders.get("eggs", 0.0))) + fraction
+            else:
+                self.game_state["inventories"]["eggs"] = legacy_eggs
 
     def _normalize_instance(self, instance):
         """Bring facility instances to a common runtime shape."""
@@ -417,7 +455,7 @@ class Simulation:
                 stock_totals["active_compost"] = stock_totals.get("active_compost", 0.0) + max(0.0, float(instance.get("active_compost_mass", 0.0)))
                 stock_totals["compost"] = stock_totals.get("compost", 0.0) + max(0.0, float(instance.get("mature_compost_mass", 0.0)))
 
-        resource_overview = {"biological_materials": {}, "utilities": {}}
+        resource_overview = {"biological_materials": {}, "yard_forage": {}, "utilities": {}}
         for resource_id, definition in self.resource_definitions.items():
             category = definition.get("category", "biological_materials")
             behavior = definition.get("behavior", "stock")
@@ -426,6 +464,23 @@ class Simulation:
                     **deepcopy(definition),
                     "amount": round(stock_totals.get(resource_id, 0.0), 4),
                 }
+
+        active_default_tiles = self._active_default_tile_count()
+        default_definition = self.facility_definitions.get(self.game_state["map"].get("default_tile"), {})
+        default_outputs = default_definition.get("outputs", {})
+        for resource_id in ("insect_forage", "green_forage"):
+            definition = self.resource_definitions.get(resource_id, {})
+            daily_rate_per_tile = float((default_outputs.get(resource_id) or {}).get("rate_per_day", 0.0))
+            daily_generation = daily_rate_per_tile * active_default_tiles
+            capacity = daily_generation * YARD_FORAGE_CAP_DAYS
+            resource_overview["yard_forage"][resource_id] = {
+                **deepcopy(definition),
+                "name": f"Yard {definition.get('name', resource_id).lower()}",
+                "amount": round(max(0.0, float(self.game_state.get("yard_resources", {}).get(resource_id, 0.0))), 4),
+                "daily_generation": round(daily_generation, 4),
+                "capacity": round(capacity, 4),
+                "behavior": "environmental_pool",
+            }
 
         resource_overview["utilities"]["electricity_balance"] = {
             "name": "Electricity",
@@ -464,6 +519,7 @@ class Simulation:
             "household_baseline_daily": self.household_daily_baseline(),
             "household_baseline_hourly": self.household_hourly_baseline(),
             "inventories": deepcopy(self.game_state["inventories"]),
+            "yard_resources": deepcopy(self.game_state["yard_resources"]),
             "current_flows": deepcopy(self.game_state["current_flows"]),
             "map": deepcopy(self.game_state["map"]),
             "house": deepcopy(self.game_state["house"]),
@@ -516,16 +572,16 @@ class Simulation:
             reserved_house_zones.append((
                 int(float(point.get("column", -1000))),
                 int(float(point.get("row", -1000))),
-                2,
-                2,
+                max(1, int(point.get("width", 1))),
+                max(1, int(point.get("height", 1))),
             ))
         storage_point = house.get("storage_point") or {}
         if storage_point:
             reserved_house_zones.append((
                 int(float(storage_point.get("column", -1000))),
                 int(float(storage_point.get("row", -1000))),
-                3,
-                2,
+                max(1, int(storage_point.get("width", 2))),
+                max(1, int(storage_point.get("height", 2))),
             ))
 
         for zone_column, zone_row, zone_width, zone_height in reserved_house_zones:
@@ -850,12 +906,16 @@ class Simulation:
         for point in (house.get("pickup_points") or {}).values():
             pc = int(float(point.get("column", -1000)))
             pr = int(float(point.get("row", -1000)))
-            if pc <= column < pc + 2 and pr <= row < pr + 2:
+            pw = max(1, int(point.get("width", 1)))
+            ph = max(1, int(point.get("height", 1)))
+            if pc <= column < pc + pw and pr <= row < pr + ph:
                 return True
         point = house.get("storage_point") or {}
         pc = int(float(point.get("column", -1000)))
         pr = int(float(point.get("row", -1000)))
-        if pc <= column < pc + 3 and pr <= row < pr + 2:
+        pw = max(1, int(point.get("width", 2)))
+        ph = max(1, int(point.get("height", 2)))
+        if pc <= column < pc + pw and pr <= row < pr + ph:
             return True
         return False
 
@@ -1057,6 +1117,7 @@ class Simulation:
             raise ValueError("Collection amount must be greater than zero.")
 
         allowed_sources = {
+            "chicken-coop": {("eggs", None)},
             "compost-pile": {("compost", "mature_compost_mass")},
             "bsfl-reactor": {("insect_forage", None), ("active_compost", "residue_mass")},
         }
@@ -1179,7 +1240,15 @@ class Simulation:
             if task.get("transfer_direction") == "to_player":
                 self._add_player_inventory(task["resource_id"], float(task["amount"]))
             else:
-                self._add_house_storage(task["resource_id"], float(task["amount"]))
+                resource_id = task["resource_id"]
+                amount = float(task["amount"])
+                if resource_id == "eggs":
+                    credit = amount * EGG_GROCERY_VALUE_USD
+                    household = self.game_state.setdefault("household", {})
+                    household["grocery_credit_usd"] = max(0.0, float(household.get("grocery_credit_usd", 0.0))) + credit
+                    task["grocery_credit_added_usd"] = round(credit, 6)
+                else:
+                    self._add_house_storage(resource_id, amount)
         elif task_type == "facility_fill":
             instance = self._find_facility_instance(task["target_instance_id"])
             field = task["target_field"]
@@ -1512,6 +1581,9 @@ class Simulation:
         flows.setdefault("municipal_water_this_tick_gal", 0.0)
 
         flows.setdefault("groceries_this_tick_usd", 0.0)
+        flows.setdefault("groceries_baseline_this_tick_usd", 0.0)
+        flows.setdefault("grocery_credit_applied_this_tick_usd", 0.0)
+        flows.setdefault("groceries_net_this_tick_usd", 0.0)
         flows.setdefault("tap_water_demand_this_tick_gal", 0.0)
         flows.setdefault("greywater_generated_this_tick_gal", 0.0)
         flows.setdefault("blackwater_generated_this_tick_gal", 0.0)
@@ -1539,12 +1611,24 @@ class Simulation:
         household_flows = hourly["hourly_flows"]
         electricity = hourly["electricity_kwh_per_hour"]
 
-        groceries = household_flows.get("groceries_usd", 0.0)
+        groceries_baseline = max(0.0, float(household_flows.get("groceries_usd", 0.0)))
+        household_state = self.game_state.setdefault("household", {})
+        grocery_credit_available = max(0.0, float(household_state.get("grocery_credit_usd", 0.0)))
+        grocery_credit_applied = min(groceries_baseline, grocery_credit_available)
+        groceries = max(0.0, groceries_baseline - grocery_credit_applied)
+        household_state["grocery_credit_usd"] = grocery_credit_available - grocery_credit_applied
+        household_state["cumulative_grocery_savings_usd"] = (
+            max(0.0, float(household_state.get("cumulative_grocery_savings_usd", 0.0)))
+            + grocery_credit_applied
+        )
         tap_water = household_flows.get("tap_water_gal", 0.0)
         greywater = household_flows.get("greywater_gal", 0.0)
         blackwater = household_flows.get("blackwater_gal", 0.0)
         other_water = household_flows.get("other_water_use_gal", 0.0)
 
+        flows["groceries_baseline_this_tick_usd"] = groceries_baseline
+        flows["grocery_credit_applied_this_tick_usd"] = grocery_credit_applied
+        flows["groceries_net_this_tick_usd"] = groceries
         flows["groceries_this_tick_usd"] = groceries
         flows["tap_water_demand_this_tick_gal"] = tap_water
         flows["greywater_generated_this_tick_gal"] = greywater
@@ -1672,37 +1756,66 @@ class Simulation:
             bird_count = min(bird_count, capacity)
             instance["current_fill"] = bird_count
         instance.setdefault("feed_mass", 0.0)
+        outputs = instance.setdefault("stored_outputs", {})
+        remainders = instance.setdefault("production_remainders", {})
 
         if bird_count <= 0:
             return {
                 "status": "idle", "reason": "no chickens", "occupancy": 0,
                 "feed_mass": round(float(instance.get("feed_mass", 0.0)), 6),
+                "stored_eggs": int(max(0.0, float(outputs.get("eggs", 0.0)))),
                 "consumed": {}, "produced": {},
             }
 
         inputs = definition.get("inputs", {})
         feed_daily = float((inputs.get("feed") or {}).get("rate_per_container_unit_per_day", 0.0))
         water_daily = float((inputs.get("water") or {}).get("rate_per_container_unit_per_day", 0.0))
-        requested_feed = feed_daily * bird_count / HOURS_PER_DAY
+        total_nutrition_required = feed_daily * bird_count / HOURS_PER_DAY
         requested_water = water_daily * bird_count / HOURS_PER_DAY
 
-        available_feed = max(0.0, float(instance.get("feed_mass", 0.0)))
-        utilization = 1.0 if requested_feed <= 0 else min(1.0, available_feed / requested_feed)
-        utilization = max(0.0, min(1.0, utilization))
+        yard = self.game_state.setdefault("yard_resources", {})
+        nutrition_from_forage = 0.0
+        consumed = {}
+        forage_detail = {}
 
-        used_feed = min(available_feed, requested_feed * utilization)
+        for resource_id in ("insect_forage", "green_forage"):
+            rule = inputs.get(resource_id) or {}
+            max_fraction = max(0.0, min(1.0, float(rule.get("max_nutrition_fraction", 0.0))))
+            equivalent = max(0.0, float(rule.get("feed_equivalent_per_lb", 0.0)))
+            contribution_cap = total_nutrition_required * max_fraction
+            available = max(0.0, float(yard.get(resource_id, 0.0)))
+            physical_requested = contribution_cap / equivalent if equivalent > 0 else 0.0
+            used = min(available, physical_requested)
+            contribution = used * equivalent
+            yard[resource_id] = max(0.0, available - used)
+            nutrition_from_forage += contribution
+            if used > 0:
+                consumed[resource_id] = round(used, 6)
+            forage_detail[resource_id] = {
+                "used_lb": round(used, 6),
+                "feed_equivalent_lb": round(contribution, 6),
+                "nutrition_cap_lb_feed_equivalent": round(contribution_cap, 6),
+            }
+
+        commercial_feed_needed = max(0.0, total_nutrition_required - nutrition_from_forage)
+        available_feed = max(0.0, float(instance.get("feed_mass", 0.0)))
+        used_feed = min(available_feed, commercial_feed_needed)
         instance["feed_mass"] = max(0.0, available_feed - used_feed)
+        if used_feed > 0:
+            consumed["feed"] = round(used_feed, 6)
+
+        nutrition_received = nutrition_from_forage + used_feed
+        utilization = (
+            1.0
+            if total_nutrition_required <= 0
+            else max(0.0, min(1.0, nutrition_received / total_nutrition_required))
+        )
+
         used_water = requested_water * utilization
-        # Water delivery is still abstracted as municipal supply until the
-        # household water-routing system is implemented.
         self.game_state["current_flows"]["municipal_water_this_tick_gal"] = (
             float(self.game_state["current_flows"].get("municipal_water_this_tick_gal", 0.0))
             + used_water
         )
-
-        consumed = {}
-        if used_feed > 0:
-            consumed["feed"] = round(used_feed, 6)
         if used_water > 0:
             consumed["water"] = round(used_water, 6)
 
@@ -1711,17 +1824,31 @@ class Simulation:
             per_unit_daily = rule.get("rate_per_container_unit_per_day")
             if per_unit_daily is None:
                 continue
-            amount = float(per_unit_daily) * bird_count / HOURS_PER_DAY * utilization
-            self._add_inventory(resource_id, amount)
-            if amount > 0:
-                produced[resource_id] = round(amount, 6)
+            expected_amount = float(per_unit_daily) * bird_count / HOURS_PER_DAY * utilization
+            if resource_id == "eggs":
+                total_with_remainder = max(0.0, float(remainders.get("eggs", 0.0))) + expected_amount
+                whole_eggs = math.floor(total_with_remainder + 1e-9)
+                remainders["eggs"] = max(0.0, total_with_remainder - whole_eggs)
+                if whole_eggs > 0:
+                    outputs["eggs"] = max(0.0, float(outputs.get("eggs", 0.0))) + whole_eggs
+                    produced["eggs"] = whole_eggs
+            else:
+                self._add_inventory(resource_id, expected_amount)
+                if expected_amount > 0:
+                    produced[resource_id] = round(expected_amount, 6)
 
-        reason = None if utilization >= 1.0 else "limited by feed"
+        reason = None if utilization >= 1.0 - 1e-9 else "limited by available nutrition"
         return {
             "status": "operating" if utilization > 0 else "idle",
             "occupancy": bird_count,
             "capacity": capacity,
             "feed_mass": round(float(instance.get("feed_mass", 0.0)), 6),
+            "stored_eggs": int(max(0.0, float(outputs.get("eggs", 0.0)))),
+            "egg_production_remainder": round(float(remainders.get("eggs", 0.0)), 6),
+            "nutrition_required_lb_feed_equivalent": round(total_nutrition_required, 6),
+            "nutrition_received_lb_feed_equivalent": round(nutrition_received, 6),
+            "commercial_feed_needed_after_forage_lb": round(commercial_feed_needed, 6),
+            "forage": forage_detail,
             "utilization_pct": round(utilization * 100, 1),
             "consumed": consumed,
             "produced": produced,
@@ -2053,6 +2180,21 @@ class Simulation:
     # Default map tile processing
     # ------------------------------------------------------------------
 
+    def _active_default_tile_count(self):
+        map_state = self.game_state["map"]
+        default_tile_id = map_state.get("default_tile")
+        total_tiles = int(map_state["width_tiles"]) * int(map_state["height_tiles"])
+        occupied_tiles = 0
+        for instance in self.game_state["facilities"]:
+            self._normalize_instance(instance)
+            occupied_tiles += int(instance["width"]) * int(instance["height"])
+        overridden_default_tiles = sum(
+            1
+            for tile in self.game_state.get("tile_states", [])
+            if tile.get("type") != default_tile_id
+        )
+        return max(0, total_tiles - occupied_tiles - overridden_default_tiles)
+
     def _process_default_tile(self):
         map_state = self.game_state["map"]
         default_tile_id = map_state.get("default_tile")
@@ -2061,29 +2203,11 @@ class Simulation:
         if definition is None:
             return None
 
-        total_tiles = (
-            int(map_state["width_tiles"])
-            * int(map_state["height_tiles"])
-        )
-
-        occupied_tiles = 0
-        for instance in self.game_state["facilities"]:
-            self._normalize_instance(instance)
-            occupied_tiles += int(instance["width"]) * int(instance["height"])
-
-        # Explicit tile states are considered non-default tiles unless they
-        # explicitly declare the same type as the map default.
-        overridden_default_tiles = 0
-        for tile in self.game_state.get("tile_states", []):
-            if tile.get("type") != default_tile_id:
-                overridden_default_tiles += 1
-
-        active_tiles = max(
-            0,
-            total_tiles - occupied_tiles - overridden_default_tiles,
-        )
-
+        active_tiles = self._active_default_tile_count()
         produced = {}
+        forage_capacity = {}
+        yard = self.game_state.setdefault("yard_resources", {})
+
         for resource_id, rule in definition.get("outputs", {}).items():
             if not isinstance(rule, dict):
                 continue
@@ -2091,21 +2215,30 @@ class Simulation:
             if daily_rate is None:
                 continue
 
-            amount = (
-                float(daily_rate)
-                * active_tiles
-                / HOURS_PER_DAY
-            )
-            self._add_inventory(resource_id, amount)
-            produced[resource_id] = round(amount, 6)
+            daily_generation = float(daily_rate) * active_tiles
+            amount = daily_generation / HOURS_PER_DAY
 
-        # Scat assimilation is deliberately not auto-routed yet.  We need a
-        # spatial rule for where animal waste is deposited before consuming
-        # household/global scat against lawn capacity.
-        assimilation_rule = (
-            definition.get("inputs", {})
-            .get("scat", {})
-        )
+            if resource_id in {"insect_forage", "green_forage"}:
+                capacity = daily_generation * YARD_FORAGE_CAP_DAYS
+                current = max(0.0, float(yard.get(resource_id, 0.0)))
+                # Dynamic carrying capacity follows the amount of unimproved
+                # grass. If grass area shrinks, excess environmental forage is
+                # clamped rather than becoming transferable stored inventory.
+                current = min(current, capacity)
+                new_amount = min(capacity, current + amount)
+                generated = max(0.0, new_amount - current)
+                yard[resource_id] = new_amount
+                produced[resource_id] = round(generated, 6)
+                forage_capacity[resource_id] = {
+                    "amount": round(new_amount, 6),
+                    "daily_generation": round(daily_generation, 6),
+                    "capacity": round(capacity, 6),
+                }
+            else:
+                self._add_inventory(resource_id, amount)
+                produced[resource_id] = round(amount, 6)
+
+        assimilation_rule = (definition.get("inputs", {}).get("scat", {}))
         scat_capacity = 0.0
         if assimilation_rule.get("capacity_per_day") is not None:
             scat_capacity = (
@@ -2120,6 +2253,8 @@ class Simulation:
             "status": "operating",
             "active_tiles": active_tiles,
             "produced": produced,
+            "yard_forage": forage_capacity,
             "potential_scat_assimilation_lb": round(scat_capacity, 6),
-            "note": "Scat assimilation is reported but not auto-routed until spatial animal-waste logic exists.",
+            "note": "Yard forage is an environmental pool capped at three days of current grass-tile generation; scat assimilation remains reported but not auto-routed.",
         }
+

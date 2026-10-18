@@ -25,6 +25,10 @@
         "insect_forage": {
           "rate_per_day": 0.0011,
           "unit": "lb"
+        },
+        "green_forage": {
+          "rate_per_day": 0.006,
+          "unit": "lb"
         }
       },
       "labor": {
@@ -42,7 +46,8 @@
       "notes": [
         "Default unimproved lawn is centipedegrass.",
         "Natural sunlight, rainfall, temperature, and ordinary soil conditions are abstracted.",
-        "Scat up to the assimilation capacity is treated as passively incorporated into the soil."
+        "Scat up to the assimilation capacity is treated as passively incorporated into the soil.",
+        "Green forage represents the edible soft-plant/seed fraction available to free-ranging chickens, not total lawn biomass."
       ]
     },
     {
@@ -60,6 +65,18 @@
         "water": {
           "rate_per_container_unit_per_day": 0.05,
           "unit": "gal"
+        },
+        "insect_forage": {
+          "source": "yard_resources",
+          "feed_equivalent_per_lb": 1.0,
+          "max_nutrition_fraction": 0.3333333333333333,
+          "unit": "lb"
+        },
+        "green_forage": {
+          "source": "yard_resources",
+          "feed_equivalent_per_lb": 0.25,
+          "max_nutrition_fraction": 0.3333333333333333,
+          "unit": "lb"
         }
       },
       "outputs": {
@@ -91,7 +108,12 @@
       },
       "notes": [
         "Static shelter/roosting facility for free-ranging laying hens.",
-        "Feed, water, eggs, scat, and variable labor scale with current chicken count.",
+        "Commercial feed defines the full 0.25 lb feed-equivalent daily nutrition requirement per bird and can satisfy any portion not supplied by forage.",
+        "Property-wide yard insect forage can satisfy up to one-third of daily nutrition at 1.0 lb feed-equivalent per lb of forage.",
+        "Property-wide green forage can satisfy up to one-third of daily nutrition at 0.25 lb feed-equivalent per lb of forage.",
+        "Birds are assumed to range across the whole yard; yard forage is consumed automatically and is not a transferable stored resource.",
+        "Eggs accumulate as whole units in the coop and remain there until manually collected.",
+        "Water, eggs, scat, and variable labor scale with current chicken count.",
         "Current fill level is runtime state, not part of the facility type definition."
       ]
     },

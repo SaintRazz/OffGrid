@@ -1100,70 +1100,112 @@ body {
   box-shadow: 0 -3px 0 #bca88c, 0 -5px 0 #57483b, 0 -6px 5px rgba(20,25,19,0.25);
 }
 
-.house-eaves::after {
-  content: "HOUSE";
-  position: absolute;
-  left: 50%;
-  top: -1.25rem;
-  transform: translateX(-50%);
-  padding: 0.12rem 0.3rem;
-  border: 1px solid rgba(54,47,38,0.55);
-  background: rgba(249,245,222,0.9);
-  color: #3e392f;
-  font-size: clamp(0.4rem, 0.65vw, 0.62rem);
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  line-height: 1;
-  white-space: nowrap;
-}
 
-.house-pickup {
+.house-pickup,
+.house-storage {
   position: relative;
   z-index: 13;
-  align-self: end;
+  align-self: stretch;
   justify-self: stretch;
-  display: grid;
-  grid-template-columns: auto 1fr;
-  grid-template-rows: auto auto;
-  gap: 0.08rem 0.22rem;
   min-width: 0;
   min-height: 0;
-  margin: 10%;
-  padding: 0.18rem 0.22rem;
-  border: 2px solid #4f493d;
-  border-radius: 2px;
-  background: #f3edcf;
-  color: #332f29;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background-color: transparent;
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: contain;
+  color: #fff9dc;
   font: inherit;
-  font-size: clamp(0.36rem, 0.58vw, 0.58rem);
-  line-height: 1.05;
-  text-align: left;
   cursor: pointer;
-  box-shadow: 1px 1px 0 rgba(30,28,24,0.32);
-}
-
-.house-pickup .pickup-icon {
-  grid-row: 1 / span 2;
-  align-self: center;
-  font-size: 1.15em;
-}
-
-.house-pickup strong {
-  font-size: 0.95em;
-}
-
-.house-pickup:hover,
-.house-pickup:focus-visible {
-  outline: 2px solid #567344;
-  outline-offset: 1px;
+  image-rendering: pixelated;
+  overflow: visible;
 }
 
 .kitchen-pickup {
-  background: #eadbb6;
+  background-image: url("/static/assets/sprites/FoodWaste.png");
 }
 
 .paper-pickup {
-  background: #e7e1d4;
+  background-image: url("/static/assets/sprites/PaperWaste.png");
+}
+
+.house-storage {
+  background-image: url("/static/assets/sprites/StorageShed.png");
+}
+
+
+.map-storage-tooltip {
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 0.35rem);
+  z-index: 50;
+  min-width: max-content;
+  max-width: 14rem;
+  transform: translate(-50%, 0.2rem);
+  padding: 0.28rem 0.42rem;
+  border: 2px solid #4d3427;
+  border-radius: 0.2rem;
+  background: rgba(31, 27, 23, 0.96);
+  color: #fff8dc;
+  box-shadow: 0 2px 0 rgba(0, 0, 0, 0.35);
+  font-size: clamp(0.34rem, 0.52vw, 0.58rem);
+  line-height: 1.25;
+  text-align: left;
+  text-shadow: 1px 1px 0 #000;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 80ms linear, transform 80ms linear, visibility 80ms linear;
+}
+
+.map-storage-tooltip::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 100%;
+  width: 0;
+  height: 0;
+  transform: translateX(-50%);
+  border-left: 0.28rem solid transparent;
+  border-right: 0.28rem solid transparent;
+  border-top: 0.34rem solid #4d3427;
+}
+
+.map-storage-tooltip strong,
+.map-storage-tooltip span {
+  display: block;
+}
+
+.map-storage-tooltip strong {
+  margin-bottom: 0.08rem;
+  color: #fff4be;
+  font-weight: 800;
+}
+
+.map-storage-tooltip .tooltip-contents {
+  color: #fff;
+}
+
+.house-pickup:hover .map-storage-tooltip,
+.house-pickup:focus-visible .map-storage-tooltip,
+.house-storage:hover .map-storage-tooltip,
+.house-storage:focus-visible .map-storage-tooltip {
+  opacity: 1;
+  visibility: visible;
+  transform: translate(-50%, 0);
+}
+
+.house-pickup:hover,
+.house-pickup:focus-visible,
+.house-storage:hover,
+.house-storage:focus-visible {
+  outline: 2px solid #f2e8a6;
+  outline-offset: 1px;
+  filter: brightness(1.08);
 }
 
 .contents-row.is-focused {
@@ -1219,47 +1261,6 @@ body {
 .topbar-button:disabled {
   opacity: 0.5;
   cursor: wait;
-}
-
-.house-storage {
-  position: relative;
-  z-index: 13;
-  align-self: end;
-  justify-self: stretch;
-  display: grid;
-  grid-template-columns: auto 1fr;
-  grid-template-rows: auto auto;
-  gap: 0.08rem 0.22rem;
-  min-width: 0;
-  min-height: 0;
-  margin: 7%;
-  padding: 0.18rem 0.22rem;
-  border: 2px solid #494339;
-  border-radius: 2px;
-  background: #d7d3bd;
-  color: #302d28;
-  font: inherit;
-  font-size: clamp(0.34rem, 0.55vw, 0.56rem);
-  line-height: 1.05;
-  text-align: left;
-  cursor: pointer;
-  box-shadow: 1px 1px 0 rgba(30,28,24,0.32);
-}
-
-.house-storage .pickup-icon {
-  grid-row: 1 / span 2;
-  align-self: center;
-  font-size: 1.15em;
-}
-
-.house-storage strong {
-  font-size: 0.95em;
-}
-
-.house-storage:hover,
-.house-storage:focus-visible {
-  outline: 2px solid #567344;
-  outline-offset: 1px;
 }
 
 .storage-transfer-controls {

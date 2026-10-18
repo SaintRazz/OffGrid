@@ -43,6 +43,7 @@ if (landGrid) {
   const currentTaskCard = document.getElementById("current-task-card");
   const taskQueueList = document.getElementById("task-queue-list");
   const biologicalResourceList = document.getElementById("biological-resource-list");
+  const yardResourceList = document.getElementById("yard-resource-list");
   const utilityResourceList = document.getElementById("utility-resource-list");
 
   const mapViewport = document.getElementById("map-viewport");
@@ -94,33 +95,17 @@ if (landGrid) {
   }
 
   function formatAmount(value, digits = 4) {
-    return new Intl.NumberFormat(undefined, {
-      maximumFractionDigits: digits,
-    }).format(Number(value ?? 0));
+    return new Intl.NumberFormat(undefined, { maximumFractionDigits: digits }).format(Number(value ?? 0));
   }
 
   function prettyName(value) {
-    return String(value ?? "")
-      .replaceAll("_", " ")
-      .replaceAll("-", " ")
-      .replace(/\b\w/g, (c) => c.toUpperCase());
+    return String(value ?? "").replaceAll("_", " ").replaceAll("-", " ").replace(/\b\w/g, (c) => c.toUpperCase());
   }
 
-  function resourceDefinition(id) {
-    return simulationState?.resource_definitions?.[id] ?? null;
-  }
-
-  function resourceLabel(id) {
-    return resourceDefinition(id)?.name ?? prettyName(id);
-  }
-
-  function resourceUnit(id) {
-    return resourceDefinition(id)?.unit ?? (id === "chicken" ? "bird" : "lb");
-  }
-
-  function isDiscrete(id) {
-    return resourceDefinition(id)?.quantity_mode === "discrete";
-  }
+  function resourceDefinition(id) { return simulationState?.resource_definitions?.[id] ?? null; }
+  function resourceLabel(id) { return resourceDefinition(id)?.name ?? prettyName(id); }
+  function resourceUnit(id) { return resourceDefinition(id)?.unit ?? (id === "chicken" ? "bird" : "lb"); }
+  function isDiscrete(id) { return resourceDefinition(id)?.quantity_mode === "discrete"; }
 
   function addListItem(list, label, value) {
     const item = document.createElement("li");
@@ -130,19 +115,11 @@ if (landGrid) {
 
   async function api(url, options = {}) {
     const response = await fetch(url, {
-      headers: {
-        "Content-Type": "application/json",
-        ...(options.headers ?? {}),
-      },
+      headers: { "Content-Type": "application/json", ...(options.headers ?? {}) },
       ...options,
     });
-
     const data = await response.json().catch(() => ({}));
-
-    if (!response.ok) {
-      throw new Error(data.error || `${response.status} ${response.statusText}`);
-    }
-
+    if (!response.ok) throw new Error(data.error || `${response.status} ${response.statusText}`);
     return data;
   }
 
@@ -156,28 +133,17 @@ if (landGrid) {
     if (minutes === 30) return "30 sim min / real sec";
     if (minutes === 60) return "1 sim hour / real sec";
     if (minutes === 1440) return "1 sim day / real sec";
-
     return `${minutes} sim min / real sec`;
   }
 
   function setRuntimeRunning(running, label = null) {
     runtimeStatus?.classList.toggle("is-running", running);
-
-    if (runtimeLabel) {
-      runtimeLabel.textContent = label ?? (running ? "Running" : "Paused");
-    }
+    if (runtimeLabel) runtimeLabel.textContent = label ?? (running ? "Running" : "Paused");
   }
 
   function startRuntime() {
-    if (runtimeTimer !== null || interactionOpen || !gameLoaded) {
-      return;
-    }
-
-    setRuntimeRunning(
-      true,
-      `Running · ${speedLabel(currentSpeedMinutes())}`
-    );
-
+    if (runtimeTimer !== null || interactionOpen || !gameLoaded) return;
+    setRuntimeRunning(true, `Running · ${speedLabel(currentSpeedMinutes())}`);
     runtimeTimer = window.setInterval(runGamePulse, GAME_PULSE_MS);
   }
 
@@ -186,117 +152,54 @@ if (landGrid) {
       clearInterval(runtimeTimer);
       runtimeTimer = null;
     }
-
     setRuntimeRunning(false, label);
   }
 
   async function advanceSimulation(minutes, message = null) {
-    if (!gameLoaded || advanceInFlight || interactionOpen) {
-      return null;
-    }
-
+    if (!gameLoaded || advanceInFlight || interactionOpen) return null;
     advanceInFlight = true;
-
-    if (nextDayButton) {
-      nextDayButton.disabled = true;
-    }
-
+    if (nextDayButton) nextDayButton.disabled = true;
     try {
-      const result = await api("/api/advance", {
-        method: "POST",
-        body: JSON.stringify({ minutes }),
-      });
-
-      renderState(
-        result.state,
-        result.activity ?? result.movement ?? null
-      );
-
-      if (message) {
-        statusLine.textContent = message;
-      }
-
+      const result = await api("/api/advance", { method: "POST", body: JSON.stringify({ minutes }) });
+      renderState(result.state, result.activity ?? result.movement ?? null);
+      if (message) statusLine.textContent = message;
       return result;
     } catch (error) {
       stopRuntime("Stopped");
-      statusLine.textContent =
-        `Automatic time stopped: ${error.message}`;
-
+      statusLine.textContent = `Automatic time stopped: ${error.message}`;
       return null;
     } finally {
       advanceInFlight = false;
-
-      if (nextDayButton) {
-        nextDayButton.disabled = false;
-      }
+      if (nextDayButton) nextDayButton.disabled = false;
     }
   }
 
-  async function runGamePulse() {
-    await advanceSimulation(currentSpeedMinutes());
-  }
+  async function runGamePulse() { await advanceSimulation(currentSpeedMinutes()); }
 
   function setDateAndClock(state) {
     const dateElement = document.getElementById("simulation-date");
     const clockElement = document.getElementById("simulation-clock");
-
     if (!state?.current_time) {
       dateElement.textContent = "Not started";
       clockElement.textContent = "--:--";
       return;
     }
-
     const date = new Date(state.current_time);
-
-    dateElement.textContent =
-      new Intl.DateTimeFormat(undefined, {
-        year: "numeric",
-        month: "short",
-        day: "numeric",
-      }).format(date);
-
-    clockElement.textContent =
-      new Intl.DateTimeFormat(undefined, {
-        hour: "numeric",
-        minute: "2-digit",
-      }).format(date);
+    dateElement.textContent = new Intl.DateTimeFormat(undefined, { year: "numeric", month: "short", day: "numeric" }).format(date);
+    clockElement.textContent = new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" }).format(date);
   }
 
-  function clamp(v, lo, hi) {
-    return Math.min(hi, Math.max(lo, v));
-  }
+  function clamp(v, lo, hi) { return Math.min(hi, Math.max(lo, v)); }
 
-  function clampMapPan(
-    x = mapPanX,
-    y = mapPanY,
-    zoom = mapZoom
-  ) {
+  function clampMapPan(x = mapPanX, y = mapPanY, zoom = mapZoom) {
     return {
-      x: clamp(
-        x,
-        Math.min(
-          0,
-          mapViewport.clientWidth -
-            landGrid.offsetWidth * zoom
-        ),
-        0
-      ),
-
-      y: clamp(
-        y,
-        Math.min(
-          0,
-          mapViewport.clientHeight -
-            landGrid.offsetHeight * zoom
-        ),
-        0
-      ),
+      x: clamp(x, Math.min(0, mapViewport.clientWidth - landGrid.offsetWidth * zoom), 0),
+      y: clamp(y, Math.min(0, mapViewport.clientHeight - landGrid.offsetHeight * zoom), 0),
     };
   }
 
   function renderMapTransform() {
     const p = clampMapPan();
-
     mapPanX = p.x;
     mapPanY = p.y;
 
@@ -312,64 +215,25 @@ if (landGrid) {
         `translate(${mapPanX}px, ${mapPanY}px) scale(${mapZoom})`;
     }
 
-    zoomLevel.textContent =
-      `${Math.round(mapZoom * 100)}%`;
-
-    mapViewport.classList.toggle(
-      "is-zoomed",
-      mapZoom > 1
-    );
-
-    zoomOutButton.disabled =
-      mapZoom <= MIN_ZOOM;
-
-    zoomInButton.disabled =
-      mapZoom >= MAX_ZOOM;
+    zoomLevel.textContent = `${Math.round(mapZoom * 100)}%`;
+    mapViewport.classList.toggle("is-zoomed", mapZoom > 1);
+    zoomOutButton.disabled = mapZoom <= MIN_ZOOM;
+    zoomInButton.disabled = mapZoom >= MAX_ZOOM;
   }
 
-  function setMapZoom(
-    requested,
-    clientX = null,
-    clientY = null
-  ) {
-    const next =
-      clamp(
-        requested,
-        MIN_ZOOM,
-        MAX_ZOOM
-      );
+  function setMapZoom(requested, clientX = null, clientY = null) {
+    const next = clamp(requested, MIN_ZOOM, MAX_ZOOM);
+    if (next === mapZoom) return;
 
-    if (next === mapZoom) {
-      return;
-    }
+    const rect = mapViewport.getBoundingClientRect();
+    const fx = clientX == null ? rect.width / 2 : clientX - rect.left;
+    const fy = clientY == null ? rect.height / 2 : clientY - rect.top;
+    const mx = (fx - mapPanX) / mapZoom;
+    const my = (fy - mapPanY) / mapZoom;
 
-    const rect =
-      mapViewport.getBoundingClientRect();
-
-    const fx =
-      clientX == null
-        ? rect.width / 2
-        : clientX - rect.left;
-
-    const fy =
-      clientY == null
-        ? rect.height / 2
-        : clientY - rect.top;
-
-    const mx =
-      (fx - mapPanX) / mapZoom;
-
-    const my =
-      (fy - mapPanY) / mapZoom;
-
-    mapPanX =
-      fx - mx * next;
-
-    mapPanY =
-      fy - my * next;
-
+    mapPanX = fx - mx * next;
+    mapPanY = fy - my * next;
     mapZoom = next;
-
     renderMapTransform();
   }
 
@@ -380,254 +244,125 @@ if (landGrid) {
     renderMapTransform();
   }
 
-  zoomInButton.addEventListener(
-    "click",
-    () => setMapZoom(mapZoom + ZOOM_STEP)
-  );
+  zoomInButton.addEventListener("click", () => setMapZoom(mapZoom + ZOOM_STEP));
+  zoomOutButton.addEventListener("click", () => setMapZoom(mapZoom - ZOOM_STEP));
+  zoomResetButton.addEventListener("click", resetMapView);
+  window.addEventListener("resize", renderMapTransform);
 
-  zoomOutButton.addEventListener(
-    "click",
-    () => setMapZoom(mapZoom - ZOOM_STEP)
-  );
+  mapViewport.addEventListener("wheel", (event) => {
+    event.preventDefault();
+    setMapZoom(
+      mapZoom + (event.deltaY < 0 ? ZOOM_STEP : -ZOOM_STEP),
+      event.clientX,
+      event.clientY
+    );
+  }, { passive: false });
 
-  zoomResetButton.addEventListener(
-    "click",
-    resetMapView
-  );
+  mapViewport.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0 || selectedBuildId || mapZoom <= 1) return;
 
-  window.addEventListener(
-    "resize",
-    renderMapTransform
-  );
+    mapPointerDown = true;
+    mapPointerId = event.pointerId;
+    mapDragStarted = false;
+    dragStartX = event.clientX;
+    dragStartY = event.clientY;
+    dragStartPanX = mapPanX;
+    dragStartPanY = mapPanY;
+  });
 
-  mapViewport.addEventListener(
-    "wheel",
-    (event) => {
-      event.preventDefault();
+  mapViewport.addEventListener("pointermove", (event) => {
+    if (!mapPointerDown || event.pointerId !== mapPointerId) return;
 
-      setMapZoom(
-        mapZoom +
-          (
-            event.deltaY < 0
-              ? ZOOM_STEP
-              : -ZOOM_STEP
-          ),
-        event.clientX,
-        event.clientY
-      );
-    },
-    {
-      passive: false,
+    const dx = event.clientX - dragStartX;
+    const dy = event.clientY - dragStartY;
+
+    if (!mapDragStarted) {
+      if (Math.hypot(dx, dy) < DRAG_THRESHOLD_PX) return;
+
+      mapDragStarted = true;
+      mapViewport.setPointerCapture(event.pointerId);
+      mapViewport.classList.add("is-dragging");
+
+      clearMapSelection();
+      closeInspector();
     }
-  );
 
-  mapViewport.addEventListener(
-    "pointerdown",
-    (event) => {
-      if (
-        event.button !== 0 ||
-        selectedBuildId ||
-        mapZoom <= 1
-      ) {
-        return;
-      }
+    event.preventDefault();
 
-      mapPointerDown = true;
-      mapPointerId = event.pointerId;
-      mapDragStarted = false;
+    const p = clampMapPan(
+      dragStartPanX + dx,
+      dragStartPanY + dy
+    );
 
-      dragStartX = event.clientX;
-      dragStartY = event.clientY;
-
-      dragStartPanX = mapPanX;
-      dragStartPanY = mapPanY;
-    }
-  );
-
-  mapViewport.addEventListener(
-    "pointermove",
-    (event) => {
-      if (
-        !mapPointerDown ||
-        event.pointerId !== mapPointerId
-      ) {
-        return;
-      }
-
-      const dx =
-        event.clientX - dragStartX;
-
-      const dy =
-        event.clientY - dragStartY;
-
-      if (!mapDragStarted) {
-        if (
-          Math.hypot(dx, dy) <
-          DRAG_THRESHOLD_PX
-        ) {
-          return;
-        }
-
-        mapDragStarted = true;
-
-        mapViewport.setPointerCapture(
-          event.pointerId
-        );
-
-        mapViewport.classList.add(
-          "is-dragging"
-        );
-
-        clearMapSelection();
-        closeInspector();
-      }
-
-      event.preventDefault();
-
-      const p =
-        clampMapPan(
-          dragStartPanX + dx,
-          dragStartPanY + dy
-        );
-
-      mapPanX = p.x;
-      mapPanY = p.y;
-
-      renderMapTransform();
-    }
-  );
+    mapPanX = p.x;
+    mapPanY = p.y;
+    renderMapTransform();
+  });
 
   function finishMapDrag(event) {
-    if (
-      !mapPointerDown ||
-      event.pointerId !== mapPointerId
-    ) {
-      return;
-    }
+    if (!mapPointerDown || event.pointerId !== mapPointerId) return;
 
-    if (mapDragStarted) {
-      suppressNextMapClick = true;
-    }
+    if (mapDragStarted) suppressNextMapClick = true;
 
     mapPointerDown = false;
     mapPointerId = null;
-
-    mapViewport.classList.remove(
-      "is-dragging"
-    );
+    mapViewport.classList.remove("is-dragging");
 
     if (
       mapDragStarted &&
-      mapViewport.hasPointerCapture(
-        event.pointerId
-      )
+      mapViewport.hasPointerCapture(event.pointerId)
     ) {
-      mapViewport.releasePointerCapture(
-        event.pointerId
-      );
+      mapViewport.releasePointerCapture(event.pointerId);
     }
 
     mapDragStarted = false;
   }
 
-  mapViewport.addEventListener(
-    "pointerup",
-    finishMapDrag
-  );
+  mapViewport.addEventListener("pointerup", finishMapDrag);
+  mapViewport.addEventListener("pointercancel", finishMapDrag);
 
-  mapViewport.addEventListener(
-    "pointercancel",
-    finishMapDrag
-  );
-
-  function mapCoordinatesFromClient(
-    clientX,
-    clientY
-  ) {
-    const rect =
-      landGrid.getBoundingClientRect();
+  function mapCoordinatesFromClient(clientX, clientY) {
+    const rect = landGrid.getBoundingClientRect();
 
     return {
-      column:
-        clamp(
-          Math.floor(
-            (
-              clientX -
-              rect.left
-            ) /
-            (
-              rect.width /
-              GRID_SIZE
-            )
-          ),
-          0,
-          GRID_SIZE - 1
+      column: clamp(
+        Math.floor(
+          (clientX - rect.left) /
+          (rect.width / GRID_SIZE)
         ),
-
-      row:
-        clamp(
-          Math.floor(
-            (
-              clientY -
-              rect.top
-            ) /
-            (
-              rect.height /
-              GRID_SIZE
-            )
-          ),
-          0,
-          GRID_SIZE - 1
+        0,
+        GRID_SIZE - 1
+      ),
+      row: clamp(
+        Math.floor(
+          (clientY - rect.top) /
+          (rect.height / GRID_SIZE)
         ),
+        0,
+        GRID_SIZE - 1
+      ),
     };
   }
 
   function reservedHouseZones() {
-    const house =
-      simulationState?.house ?? {};
-
+    const house = simulationState?.house ?? {};
     const zones = [];
 
-    for (
-      const point
-      of Object.values(
-        house.pickup_points ?? {}
-      )
-    ) {
+    for (const point of Object.values(house.pickup_points ?? {})) {
       zones.push({
-        column:
-          Math.floor(
-            Number(point.column)
-          ),
-
-        row:
-          Math.floor(
-            Number(point.row)
-          ),
-
-        width: 2,
-        height: 2,
+        column: Math.floor(Number(point.column)),
+        row: Math.floor(Number(point.row)),
+        width: Math.max(1, Number(point.width ?? 1)),
+        height: Math.max(1, Number(point.height ?? 1)),
       });
     }
 
     if (house.storage_point) {
       zones.push({
-        column:
-          Math.floor(
-            Number(
-              house.storage_point.column
-            )
-          ),
-
-        row:
-          Math.floor(
-            Number(
-              house.storage_point.row
-            )
-          ),
-
-        width: 3,
-        height: 2,
+        column: Math.floor(Number(house.storage_point.column)),
+        row: Math.floor(Number(house.storage_point.row)),
+        width: Math.max(1, Number(house.storage_point.width ?? 2)),
+        height: Math.max(1, Number(house.storage_point.height ?? 2)),
       });
     }
 
@@ -643,18 +378,8 @@ if (landGrid) {
     );
   }
 
-  function canPlace(
-    column,
-    row,
-    width,
-    height
-  ) {
-    const candidate = {
-      column,
-      row,
-      width,
-      height,
-    };
+  function canPlace(column, row, width, height) {
+    const candidate = { column, row, width, height };
 
     if (
       column < 0 ||
@@ -667,22 +392,14 @@ if (landGrid) {
 
     if (
       reservedHouseZones().some(
-        (z) =>
-          rectanglesOverlap(
-            candidate,
-            z
-          )
+        (z) => rectanglesOverlap(candidate, z)
       )
     ) {
       return false;
     }
 
     return placements.every(
-      (p) =>
-        !rectanglesOverlap(
-          candidate,
-          p
-        )
+      (p) => !rectanglesOverlap(candidate, p)
     );
   }
 
@@ -691,47 +408,21 @@ if (landGrid) {
     preview = null;
   }
 
-  function showPreview(
-    column,
-    row
-  ) {
+  function showPreview(column, row) {
     removePreview();
 
-    const def =
-      definitionsById.get(
-        selectedBuildId
-      );
+    const def = definitionsById.get(selectedBuildId);
+    if (!def) return;
 
-    if (!def) {
-      return;
-    }
-
-    preview =
-      document.createElement(
-        "img"
-      );
-
-    preview.className =
-      "building-sprite building-preview";
-
-    preview.src =
-      `/static/assets/sprites/${def.image}`;
-
+    preview = document.createElement("img");
+    preview.className = "building-sprite building-preview";
+    preview.src = `/static/assets/sprites/${def.image}`;
     preview.alt = "";
-
-    preview.style.gridColumn =
-      `${column + 1} / span ${def.width}`;
-
-    preview.style.gridRow =
-      `${row + 1} / span ${def.height}`;
+    preview.style.gridColumn = `${column + 1} / span ${def.width}`;
+    preview.style.gridRow = `${row + 1} / span ${def.height}`;
 
     preview.classList.add(
-      canPlace(
-        column,
-        row,
-        def.width,
-        def.height
-      )
+      canPlace(column, row, def.width, def.height)
         ? "is-valid"
         : "is-invalid"
     );
@@ -740,55 +431,36 @@ if (landGrid) {
   }
 
   function syncPlacementUi() {
-    cancelButton.disabled =
-      !selectedBuildId;
+    cancelButton.disabled = !selectedBuildId;
 
     buildList
-      .querySelectorAll(
-        ".build-option"
-      )
-      .forEach(
-        (b) =>
-          b.setAttribute(
-            "aria-pressed",
-            b.dataset.facilityId ===
-              selectedBuildId
-              ? "true"
-              : "false"
-          )
+      .querySelectorAll(".build-option")
+      .forEach((b) =>
+        b.setAttribute(
+          "aria-pressed",
+          b.dataset.facilityId === selectedBuildId
+            ? "true"
+            : "false"
+        )
       );
   }
 
   function selectBuild(id) {
     selectedBuildId = id;
-
     closeInspector();
     clearMapSelection();
     syncPlacementUi();
 
     statusLine.textContent =
-      `Place ${
-        definitionsById
-          .get(id)
-          ?.name ??
-        id
-      } on the map.`;
+      `Place ${definitionsById.get(id)?.name ?? id} on the map.`;
   }
 
-  function cancelPlacement(
-    {
-      silent = false,
-    } = {}
-  ) {
+  function cancelPlacement({ silent = false } = {}) {
     selectedBuildId = null;
-
     removePreview();
     syncPlacementUi();
 
-    if (
-      !silent &&
-      gameLoaded
-    ) {
+    if (!silent && gameLoaded) {
       statusLine.textContent =
         "Select a tile or facility to interact.";
     }
@@ -799,14 +471,8 @@ if (landGrid) {
     () => cancelPlacement()
   );
 
-  async function placeSelectedFacility(
-    column,
-    row
-  ) {
-    const def =
-      definitionsById.get(
-        selectedBuildId
-      );
+  async function placeSelectedFacility(column, row) {
+    const def = definitionsById.get(selectedBuildId);
 
     if (
       !def ||
@@ -819,41 +485,28 @@ if (landGrid) {
     ) {
       statusLine.textContent =
         "That structure cannot be placed there.";
-
       return;
     }
 
     try {
-      const result =
-        await api(
-          "/api/facilities",
-          {
-            method: "POST",
-
-            body:
-              JSON.stringify(
-                {
-                  facility_id:
-                    selectedBuildId,
-
-                  column,
-                  row,
-                }
-              ),
-          }
-        );
-
-      renderState(
-        result.state
+      const result = await api(
+        "/api/facilities",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            facility_id: selectedBuildId,
+            column,
+            row,
+          }),
+        }
       );
 
+      renderState(result.state);
       cancelPlacement();
-
       statusLine.textContent =
         `${def.name} placed.`;
     } catch (error) {
-      statusLine.textContent =
-        error.message;
+      statusLine.textContent = error.message;
     }
   }
 
@@ -861,89 +514,55 @@ if (landGrid) {
     buildList.replaceChildren();
 
     const defaultTile =
-      simulationState
-        ?.map
-        ?.default_tile;
+      simulationState?.map?.default_tile;
 
     for (
       const def
-      of simulationState
-        ?.facility_definitions ??
-      []
+      of simulationState?.facility_definitions ?? []
     ) {
-      definitionsById.set(
-        def.id,
-        def
-      );
+      definitionsById.set(def.id, def);
 
-      if (
-        def.id ===
-        defaultTile
-      ) {
+      if (def.id === defaultTile) {
         continue;
       }
 
       const button =
-        document.createElement(
-          "button"
-        );
+        document.createElement("button");
 
       button.type = "button";
-      button.className =
-        "build-option";
-
-      button.dataset.facilityId =
-        def.id;
+      button.className = "build-option";
+      button.dataset.facilityId = def.id;
 
       const image =
-        document.createElement(
-          "img"
-        );
+        document.createElement("img");
 
       image.src =
         `/static/assets/sprites/${def.image}`;
-
       image.alt = "";
 
       const text =
-        document.createElement(
-          "span"
-        );
+        document.createElement("span");
 
       const name =
-        document.createElement(
-          "strong"
-        );
+        document.createElement("strong");
 
-      name.textContent =
-        def.name;
+      name.textContent = def.name;
 
       const size =
-        document.createElement(
-          "small"
-        );
+        document.createElement("small");
 
       size.textContent =
         `${def.width} × ${def.height} tiles`;
 
-      text.append(
-        name,
-        size
-      );
-
-      button.append(
-        image,
-        text
-      );
+      text.append(name, size);
+      button.append(image, text);
 
       button.addEventListener(
         "click",
         () => selectBuild(def.id)
       );
 
-      buildList.appendChild(
-        button
-      );
+      buildList.appendChild(button);
     }
 
     syncPlacementUi();
@@ -951,30 +570,20 @@ if (landGrid) {
 
   function clearMapSelection() {
     landGrid
-      .querySelectorAll(
-        ".is-map-selected"
-      )
-      .forEach(
-        (e) =>
-          e.classList.remove(
-            "is-map-selected"
-          )
+      .querySelectorAll(".is-map-selected")
+      .forEach((e) =>
+        e.classList.remove("is-map-selected")
       );
   }
 
-  function facilityAt(
-    column,
-    row
-  ) {
+  function facilityAt(column, row) {
     return (
       placements.find(
         (i) =>
           column >= i.column &&
-          column <
-            i.column + i.width &&
+          column < i.column + i.width &&
           row >= i.row &&
-          row <
-            i.row + i.height
+          row < i.row + i.height
       ) ??
       null
     );
@@ -991,54 +600,38 @@ if (landGrid) {
       landGrid
         .querySelector(
           `[data-instance-id="${
-            CSS.escape(
-              instance.instance_id
-            )
+            CSS.escape(instance.instance_id)
           }"]`
         )
-        ?.classList
-        .add(
-          "is-map-selected"
-        );
+        ?.classList.add("is-map-selected");
     } else {
       landGrid
         .querySelector(
           `.grid-cell[data-column="${column}"][data-row="${row}"]`
         )
-        ?.classList
-        .add(
-          "is-map-selected"
-        );
+        ?.classList.add("is-map-selected");
     }
   }
 
   function beginInteractionPause() {
     interactionOpen = true;
-
     inspectorPausedRuntime =
       runtimeTimer !== null;
 
-    if (
-      inspectorPausedRuntime
-    ) {
+    if (inspectorPausedRuntime) {
       stopRuntime(
         "Paused for interaction"
       );
     }
   }
 
-  function closeInspector(
-    {
-      resume = true,
-    } = {}
-  ) {
+  function closeInspector({ resume = true } = {}) {
     const shouldResume =
       resume &&
       inspectorPausedRuntime &&
       gameLoaded;
 
     inspectorOverlay.hidden = true;
-
     selectedMapObject = null;
     inspectorMode = "summary";
     interactionOpen = false;
@@ -1051,43 +644,28 @@ if (landGrid) {
 
   function compostStatus(instance) {
     const f =
-      Number(
-        instance.feedstock_mass ??
-        0
-      );
+      Number(instance.feedstock_mass ?? 0);
 
     const a =
-      Number(
-        instance.active_compost_mass ??
-        0
-      );
+      Number(instance.active_compost_mass ?? 0);
 
     const m =
-      Number(
-        instance.mature_compost_mass ??
-        0
-      );
+      Number(instance.mature_compost_mass ?? 0);
 
-    const total =
-      f + a + m;
+    const total = f + a + m;
 
     const pending =
       Number(
-        instance.unbalanced_kitchen_waste ??
-        0
+        instance.unbalanced_kitchen_waste ?? 0
       ) +
       Number(
-        instance.unbalanced_scat ??
-        0
+        instance.unbalanced_scat ?? 0
       ) +
       Number(
-        instance.available_carbon_material ??
-        0
+        instance.available_carbon_material ?? 0
       );
 
-    if (
-      total <= 1e-9
-    ) {
+    if (total <= 1e-9) {
       return pending > 1e-9
         ? "Fresh compost inputs awaiting balancing and mixing"
         : "Empty compost pile";
@@ -1112,45 +690,36 @@ if (landGrid) {
     definition
   ) {
     const inputs =
-      definition?.inputs ??
-      {};
+      definition?.inputs ?? {};
 
     const demand =
       Number(
-        instance.unbalanced_kitchen_waste ??
-        0
+        instance.unbalanced_kitchen_waste ?? 0
       ) *
         Number(
-          inputs
-            .kitchen_waste
+          inputs.kitchen_waste
             ?.carbon_demand_lb_per_lb ??
           0.5
         ) +
       Number(
-        instance.unbalanced_scat ??
-        0
+        instance.unbalanced_scat ?? 0
       ) *
         Number(
-          inputs
-            .scat
+          inputs.scat
             ?.carbon_demand_lb_per_lb ??
           1.5
         );
 
     const carbon =
       Number(
-        instance.available_carbon_material ??
-        0
+        instance.available_carbon_material ?? 0
       );
 
     return {
       demand,
       carbon,
       needed:
-        Math.max(
-          0,
-          demand - carbon
-        ),
+        Math.max(0, demand - carbon),
     };
   }
 
@@ -1165,10 +734,7 @@ if (landGrid) {
     ].reduce(
       (sum, key) =>
         sum +
-        Number(
-          instance[key] ??
-          0
-        ),
+        Number(instance[key] ?? 0),
       0
     );
   }
@@ -1177,38 +743,27 @@ if (landGrid) {
     inspectorContent.replaceChildren();
 
     const dl =
-      document.createElement(
-        "dl"
-      );
+      document.createElement("dl");
 
-    dl.className =
-      "selection-summary";
+    dl.className = "selection-summary";
 
     let rows = [];
 
-    if (
-      selection.kind ===
-      "house"
-    ) {
+    if (selection.kind === "house") {
       const h =
-        simulationState?.house ??
-        {};
+        simulationState?.house ?? {};
 
       rows = [
         [
           "Type",
           "Household waste pickup",
         ],
-
         [
           "Kitchen waste ready",
           `${formatAmount(
-            h.outputs
-              ?.kitchen_waste ??
-            0
+            h.outputs?.kitchen_waste ?? 0
           )} lb`,
         ],
-
         [
           "Household paper browns ready",
           `${formatAmount(
@@ -1219,27 +774,22 @@ if (landGrid) {
         ],
       ];
     } else if (
-      selection.kind ===
-      "house_storage"
+      selection.kind === "house_storage"
     ) {
       rows = [
         [
           "Type",
           "House delivery / storage point",
         ],
-
         [
           "Stored resource types",
           String(
             Object.values(
-              simulationState
-                ?.house
+              simulationState?.house
                 ?.storage ??
               {}
             ).filter(
-              (v) =>
-                Number(v) >
-                1e-9
+              (v) => Number(v) > 1e-9
             ).length
           ),
         ],
@@ -1250,7 +800,6 @@ if (landGrid) {
           "Tile",
           `(${selection.column + 1}, ${selection.row + 1})`,
         ],
-
         [
           "Type",
           selection.instance
@@ -1267,14 +816,10 @@ if (landGrid) {
           [
             "Condition",
             `${formatAmount(
-              (
-                i.condition ??
-                1
-              ) * 100,
+              (i.condition ?? 1) * 100,
               1
             )}%`,
           ],
-
           [
             "Accrued labor",
             `${formatAmount(
@@ -1285,30 +830,43 @@ if (landGrid) {
           ]
         );
 
-        if (
-          i.current_fill !=
-          null
-        ) {
-          rows.push(
-            [
-              "Current fill",
-              formatAmount(
-                i.current_fill
-              ),
-            ]
-          );
+        if (i.current_fill != null) {
+          rows.push([
+            "Current fill",
+            formatAmount(i.current_fill),
+          ]);
+        }
+
+        if (i.feed_mass != null) {
+          rows.push([
+            "Chicken feed",
+            `${formatAmount(
+              i.feed_mass
+            )} lb`,
+          ]);
         }
 
         if (
-          i.feed_mass !=
-          null
+          i.facility_id ===
+          "chicken-coop"
         ) {
           rows.push(
             [
-              "Chicken feed",
+              "Eggs in coop",
               `${formatAmount(
-                i.feed_mass
-              )} lb`,
+                i.stored_outputs?.eggs ??
+                0,
+                0
+              )} eggs`,
+            ],
+            [
+              "Egg production progress",
+              `${formatAmount(
+                i.production_remainders
+                  ?.eggs ??
+                0,
+                3
+              )} toward next egg`,
             ]
           );
         }
@@ -1321,27 +879,21 @@ if (landGrid) {
             [
               "Feedstock",
               `${formatAmount(
-                i.feedstock_mass ??
-                0
+                i.feedstock_mass ?? 0
               )} lb`,
             ],
-
             [
               "Larval biomass",
               `${formatAmount(
-                i.larval_biomass ??
-                0
+                i.larval_biomass ?? 0
               )} lb`,
             ],
-
             [
               "BSFL pre-compost",
               `${formatAmount(
-                i.residue_mass ??
-                0
+                i.residue_mass ?? 0
               )} lb`,
             ],
-
             [
               "Harvest catchment",
               `${formatAmount(
@@ -1359,8 +911,7 @@ if (landGrid) {
         ) {
           const cap =
             Number(
-              selection
-                .definition
+              selection.definition
                 ?.container
                 ?.capacity ??
               0
@@ -1380,7 +931,6 @@ if (landGrid) {
               "State",
               compostStatus(i),
             ],
-
             [
               "Pile mass",
               `${formatAmount(
@@ -1389,7 +939,6 @@ if (landGrid) {
                 cap
               )} lb`,
             ],
-
             [
               "Fresh kitchen waste",
               `${formatAmount(
@@ -1397,7 +946,6 @@ if (landGrid) {
                 0
               )} lb`,
             ],
-
             [
               "Fresh scat",
               `${formatAmount(
@@ -1405,7 +953,6 @@ if (landGrid) {
                 0
               )} lb`,
             ],
-
             [
               "Carbon-rich material",
               `${formatAmount(
@@ -1413,15 +960,12 @@ if (landGrid) {
                 0
               )} lb`,
             ],
-
             [
               "Feedstock",
               `${formatAmount(
-                i.feedstock_mass ??
-                0
+                i.feedstock_mass ?? 0
               )} lb`,
             ],
-
             [
               "Active compost",
               `${formatAmount(
@@ -1429,7 +973,6 @@ if (landGrid) {
                 0
               )} lb`,
             ],
-
             [
               "Mature amendment",
               `${formatAmount(
@@ -1437,7 +980,6 @@ if (landGrid) {
                 0
               )} lb`,
             ],
-
             [
               "Carbon balance",
               c.needed > 1e-6
@@ -1452,48 +994,28 @@ if (landGrid) {
       }
     }
 
-    for (
-      const [label, value]
-      of rows
-    ) {
+    for (const [label, value] of rows) {
       const dt =
-        document.createElement(
-          "dt"
-        );
+        document.createElement("dt");
 
       const dd =
-        document.createElement(
-          "dd"
-        );
+        document.createElement("dd");
 
       dt.textContent = label;
       dd.textContent = value;
 
-      dl.append(
-        dt,
-        dd
-      );
+      dl.append(dt, dd);
     }
 
-    inspectorContent.appendChild(
-      dl
-    );
+    inspectorContent.appendChild(dl);
   }
 
-  function openSelection(
-    column,
-    row
-  ) {
+  function openSelection(column, row) {
     beginInteractionPause();
-
-    inspectorMode =
-      "summary";
+    inspectorMode = "summary";
 
     const instance =
-      facilityAt(
-        column,
-        row
-      );
+      facilityAt(column, row);
 
     const def =
       instance
@@ -1501,8 +1023,7 @@ if (landGrid) {
             instance.facility_id
           )
         : definitionsById.get(
-            simulationState
-              ?.map
+            simulationState?.map
               ?.default_tile
           );
 
@@ -1543,8 +1064,7 @@ if (landGrid) {
     serviceFacilityButton.disabled =
       !instance ||
       Number(
-        instance
-          .accrued_labor_requirement ??
+        instance.accrued_labor_requirement ??
         0
       ) <=
         1e-9;
@@ -1559,9 +1079,7 @@ if (landGrid) {
     const house =
       simulationState?.house;
 
-    if (!house) {
-      return;
-    }
+    if (!house) return;
 
     beginInteractionPause();
 
@@ -1574,17 +1092,10 @@ if (landGrid) {
 
     selectedMapObject = {
       kind: "house",
-
-      column:
-        Number(p.column),
-
-      row:
-        Number(p.row),
-
+      column: Number(p.column),
+      row: Number(p.row),
       house,
-
-      focusResourceId:
-        resourceId,
+      focusResourceId: resourceId,
     };
 
     inspectorTitle.textContent =
@@ -1627,9 +1138,7 @@ if (landGrid) {
     const house =
       simulationState?.house;
 
-    if (!house) {
-      return;
-    }
+    if (!house) return;
 
     beginInteractionPause();
 
@@ -1641,15 +1150,9 @@ if (landGrid) {
       };
 
     selectedMapObject = {
-      kind:
-        "house_storage",
-
-      column:
-        Number(p.column),
-
-      row:
-        Number(p.row),
-
+      kind: "house_storage",
+      column: Number(p.column),
+      row: Number(p.row),
       house,
     };
 
@@ -1665,9 +1168,7 @@ if (landGrid) {
 
     inspectorMode = mode;
 
-    if (
-      mode === "order"
-    ) {
+    if (mode === "order") {
       renderOrderInterface();
     } else {
       renderHouseStorageManager();
@@ -1688,8 +1189,7 @@ if (landGrid) {
     field
   ) {
     return (
-      simulationState
-        ?.player
+      simulationState?.player
         ?.task_queue ??
       []
     )
@@ -1705,10 +1205,7 @@ if (landGrid) {
       .reduce(
         (s, t) =>
           s +
-          Number(
-            t.amount ??
-            0
-          ),
+          Number(t.amount ?? 0),
         0
       );
   }
@@ -1719,8 +1216,7 @@ if (landGrid) {
     sourceField = null
   ) {
     return (
-      simulationState
-        ?.player
+      simulationState?.player
         ?.task_queue ??
       []
     )
@@ -1733,17 +1229,13 @@ if (landGrid) {
           t.resource_id ===
             resourceId &&
           (
-            t.source_field ??
-            null
+            t.source_field ?? null
           ) === sourceField
       )
       .reduce(
         (s, t) =>
           s +
-          Number(
-            t.amount ??
-            0
-          ),
+          Number(t.amount ?? 0),
         0
       );
   }
@@ -1755,83 +1247,48 @@ if (landGrid) {
     const d =
       selection?.definition;
 
-    if (
-      !i ||
-      !d
-    ) {
+    if (!i || !d) {
       return [];
     }
 
     const container =
-      d.container ??
-      {};
+      d.container ?? {};
 
     const process =
-      d.process ??
-      {};
+      d.process ?? {};
 
-    if (
-      d.id ===
-      "chicken-coop"
-    ) {
+    if (d.id === "chicken-coop") {
       return [
         {
-          resourceId:
-            "chicken",
-
-          label:
-            "Laying hen",
-
-          unit:
-            "bird",
-
-          currentField:
-            "current_fill",
-
+          resourceId: "chicken",
+          label: "Laying hen",
+          unit: "bird",
+          currentField: "current_fill",
           capacity:
             Number(
-              container.capacity ??
-              0
+              container.capacity ?? 0
             ),
         },
-
         {
-          resourceId:
-            "feed",
-
-          label:
-            "Chicken feed",
-
-          unit:
-            "lb",
-
-          currentField:
-            "feed_mass",
-
-          capacity:
-            null,
+          resourceId: "feed",
+          label: "Chicken feed",
+          unit: "lb",
+          currentField: "feed_mass",
+          capacity: null,
         },
       ];
     }
 
-    if (
-      d.id ===
-      "bsfl-reactor"
-    ) {
+    if (d.id === "bsfl-reactor") {
       return [
         {
           resourceId:
             "bsfl_biomass",
-
           label:
             "BSFL larval biomass",
-
-          unit:
-            "lb",
-
+          unit: "lb",
           currentField:
             "larval_biomass",
-
           capacity:
             Number(
               process
@@ -1839,20 +1296,14 @@ if (landGrid) {
               0
             ),
         },
-
         {
           resourceId:
             "kitchen_waste",
-
           label:
             "Kitchen waste",
-
-          unit:
-            "lb",
-
+          unit: "lb",
           currentField:
             "feedstock_mass",
-
           capacity:
             Number(
               container
@@ -1863,100 +1314,62 @@ if (landGrid) {
       ];
     }
 
-    if (
-      d.id ===
-      "compost-pile"
-    ) {
+    if (d.id === "compost-pile") {
       return [
         {
           resourceId:
             "kitchen_waste",
-
           label:
             "Kitchen waste",
-
-          unit:
-            "lb",
-
+          unit: "lb",
           currentField:
             "unbalanced_kitchen_waste",
-
-          sharedCapacity:
-            true,
-
+          sharedCapacity: true,
           capacity:
             Number(
-              container.capacity ??
-              0
+              container.capacity ?? 0
             ),
         },
-
         {
           resourceId:
             "scat",
-
           label:
             "Avian scat",
-
-          unit:
-            "lb",
-
+          unit: "lb",
           currentField:
             "unbalanced_scat",
-
-          sharedCapacity:
-            true,
-
+          sharedCapacity: true,
           capacity:
             Number(
-              container.capacity ??
-              0
+              container.capacity ?? 0
             ),
         },
-
         {
           resourceId:
             "carbonaceous_plant_waste",
-
           label:
             "Carbonaceous plant waste",
-
-          unit:
-            "lb",
-
+          unit: "lb",
           currentField:
             "available_carbon_material",
-
-          sharedCapacity:
-            true,
-
+          sharedCapacity: true,
           capacity:
             Number(
-              container.capacity ??
-              0
+              container.capacity ?? 0
             ),
         },
-
         {
           resourceId:
             "active_compost",
-
           label:
             "Active compost / pre-compost",
-
-          unit:
-            "lb",
-
+          unit: "lb",
           currentField:
             "active_compost_mass",
-
-          sharedCapacity:
-            true,
-
+          sharedCapacity: true,
           capacity:
             Number(
-              container.capacity ??
-              0
+              container.capacity ?? 0
             ),
         },
       ];
@@ -1969,8 +1382,25 @@ if (landGrid) {
     const i =
       selection?.instance;
 
-    if (!i) {
-      return [];
+    if (!i) return [];
+
+    if (
+      i.facility_id ===
+      "chicken-coop"
+    ) {
+      return [
+        {
+          resourceId: "eggs",
+          label: "Eggs",
+          unit: "egg",
+          sourceField: null,
+          available:
+            Number(
+              i.stored_outputs?.eggs ??
+              0
+            ),
+        },
+      ];
     }
 
     if (
@@ -1979,18 +1409,11 @@ if (landGrid) {
     ) {
       return [
         {
-          resourceId:
-            "compost",
-
-          label:
-            "Mature compost",
-
-          unit:
-            "lb",
-
+          resourceId: "compost",
+          label: "Mature compost",
+          unit: "lb",
           sourceField:
             "mature_compost_mass",
-
           available:
             Number(
               i.mature_compost_mass ??
@@ -2008,16 +1431,10 @@ if (landGrid) {
         {
           resourceId:
             "insect_forage",
-
           label:
             "Self-harvested BSFL",
-
-          unit:
-            "lb",
-
-          sourceField:
-            null,
-
+          unit: "lb",
+          sourceField: null,
           available:
             Number(
               i.stored_outputs
@@ -2025,24 +1442,17 @@ if (landGrid) {
               0
             ),
         },
-
         {
           resourceId:
             "active_compost",
-
           label:
             "BSFL pre-compost",
-
-          unit:
-            "lb",
-
+          unit: "lb",
           sourceField:
             "residue_mass",
-
           available:
             Number(
-              i.residue_mass ??
-              0
+              i.residue_mass ?? 0
             ),
         },
       ];
@@ -2057,19 +1467,15 @@ if (landGrid) {
     if (!selection?.instance) {
       inspectorContent.textContent =
         "This selection has no managed contents.";
-
       return;
     }
 
     if (
-      selection.instance
-        .facility_id ===
+      selection.instance.facility_id ===
       "compost-pile"
     ) {
       const note =
-        document.createElement(
-          "p"
-        );
+        document.createElement("p");
 
       note.className =
         "compost-state-note";
@@ -2079,9 +1485,7 @@ if (landGrid) {
           selection.instance
         );
 
-      inspectorContent.appendChild(
-        note
-      );
+      inspectorContent.appendChild(note);
 
       const c =
         compostCarbonNeed(
@@ -2090,9 +1494,7 @@ if (landGrid) {
         );
 
       const carbon =
-        document.createElement(
-          "p"
-        );
+        document.createElement("p");
 
       carbon.className =
         "carbon-balance-note";
@@ -2111,9 +1513,7 @@ if (landGrid) {
     }
 
     const intro =
-      document.createElement(
-        "p"
-      );
+      document.createElement("p");
 
     intro.className =
       "contents-message";
@@ -2126,18 +1526,12 @@ if (landGrid) {
     );
 
     const options =
-      managedContentOptions(
-        selection
-      );
+      managedContentOptions(selection);
 
-    for (
-      const o
-      of options
-    ) {
+    for (const o of options) {
       const carried =
         Number(
-          simulationState
-            ?.player
+          simulationState?.player
             ?.inventory
             ?.[o.resourceId] ??
           0
@@ -2145,16 +1539,14 @@ if (landGrid) {
 
       const queued =
         queuedFillAmount(
-          selection
-            .instance
+          selection.instance
             .instance_id,
           o.currentField
         );
 
       const current =
         Number(
-          selection
-            .instance
+          selection.instance
             [o.currentField] ??
           0
         );
@@ -2186,16 +1578,13 @@ if (landGrid) {
                             t.type ===
                               "facility_fill" &&
                             t.target_instance_id ===
-                              selection
-                                .instance
-                                .instance_id
+                              selection.instance.instance_id
                         )
                         .reduce(
                           (s, t) =>
                             s +
                             Number(
-                              t.amount ??
-                              0
+                              t.amount ?? 0
                             ),
                           0
                         )
@@ -2213,25 +1602,19 @@ if (landGrid) {
         );
 
       const card =
-        document.createElement(
-          "section"
-        );
+        document.createElement("section");
 
       card.className =
         "contents-row";
 
       const h =
-        document.createElement(
-          "h3"
-        );
+        document.createElement("h3");
 
       h.textContent =
         o.label;
 
       const stats =
-        document.createElement(
-          "p"
-        );
+        document.createElement("p");
 
       stats.className =
         "contents-stats";
@@ -2255,33 +1638,25 @@ if (landGrid) {
         );
 
       const form =
-        document.createElement(
-          "form"
-        );
+        document.createElement("form");
 
       form.className =
         "contents-form";
 
       const label =
-        document.createElement(
-          "label"
-        );
+        document.createElement("label");
 
       label.textContent =
         `Amount to deliver (${o.unit})`;
 
       const input =
-        document.createElement(
-          "input"
-        );
+        document.createElement("input");
 
       input.type = "number";
       input.min = "0";
 
       input.step =
-        isDiscrete(
-          o.resourceId
-        )
+        isDiscrete(o.resourceId)
           ? "1"
           : "0.1";
 
@@ -2291,9 +1666,7 @@ if (landGrid) {
       input.value =
         maximum > 0
           ? String(
-              isDiscrete(
-                o.resourceId
-              )
+              isDiscrete(o.resourceId)
                 ? Math.max(
                     1,
                     Math.floor(
@@ -2316,26 +1689,17 @@ if (landGrid) {
       label.appendChild(input);
 
       const button =
-        document.createElement(
-          "button"
-        );
+        document.createElement("button");
 
-      button.type =
-        "submit";
-
+      button.type = "submit";
       button.className =
         "interaction-button primary";
-
       button.textContent =
         "Queue Delivery";
-
       button.disabled =
         maximum <= 0;
 
-      form.append(
-        label,
-        button
-      );
+      form.append(label, button);
 
       form.addEventListener(
         "submit",
@@ -2346,9 +1710,7 @@ if (landGrid) {
             Number(input.value);
 
           if (
-            !Number.isFinite(
-              amount
-            ) ||
+            !Number.isFinite(amount) ||
             amount <= 0
           ) {
             return;
@@ -2359,31 +1721,22 @@ if (landGrid) {
               await api(
                 `/api/facilities/${
                   encodeURIComponent(
-                    selection
-                      .instance
+                    selection.instance
                       .instance_id
                   )
                 }/fill`,
                 {
-                  method:
-                    "POST",
-
+                  method: "POST",
                   body:
-                    JSON.stringify(
-                      {
-                        resource_id:
-                          o.resourceId,
-
-                        amount,
-                      }
-                    ),
+                    JSON.stringify({
+                      resource_id:
+                        o.resourceId,
+                      amount,
+                    }),
                 }
               );
 
-            renderState(
-              result.state
-            );
-
+            renderState(result.state);
             refreshOpenInspector();
 
             statusLine.textContent =
@@ -2395,27 +1748,17 @@ if (landGrid) {
         }
       );
 
-      card.append(
-        h,
-        stats,
-        form
-      );
-
-      inspectorContent.appendChild(
-        card
-      );
+      card.append(h, stats, form);
+      inspectorContent.appendChild(card);
     }
 
     for (
       const o
-      of collectionOptions(
-        selection
-      )
+      of collectionOptions(selection)
     ) {
       const reserved =
         queuedCollectionAmount(
-          selection
-            .instance
+          selection.instance
             .instance_id,
           o.resourceId,
           o.sourceField
@@ -2424,30 +1767,22 @@ if (landGrid) {
       const available =
         Math.max(
           0,
-          o.available -
-            reserved
+          o.available - reserved
         );
 
       const card =
-        document.createElement(
-          "section"
-        );
+        document.createElement("section");
 
       card.className =
         "contents-row output-collection-row";
 
       const h =
-        document.createElement(
-          "h3"
-        );
+        document.createElement("h3");
 
-      h.textContent =
-        o.label;
+      h.textContent = o.label;
 
       const stats =
-        document.createElement(
-          "p"
-        );
+        document.createElement("p");
 
       stats.className =
         "contents-stats";
@@ -2465,33 +1800,25 @@ if (landGrid) {
         );
 
       const form =
-        document.createElement(
-          "form"
-        );
+        document.createElement("form");
 
       form.className =
         "contents-form";
 
       const label =
-        document.createElement(
-          "label"
-        );
+        document.createElement("label");
 
       label.textContent =
         `Amount to collect (${o.unit})`;
 
       const input =
-        document.createElement(
-          "input"
-        );
+        document.createElement("input");
 
       input.type = "number";
       input.min = "0";
 
       input.step =
-        isDiscrete(
-          o.resourceId
-        )
+        isDiscrete(o.resourceId)
           ? "1"
           : "0.1";
 
@@ -2501,9 +1828,7 @@ if (landGrid) {
       input.value =
         available > 0
           ? String(
-              isDiscrete(
-                o.resourceId
-              )
+              isDiscrete(o.resourceId)
                 ? Math.max(
                     1,
                     Math.floor(
@@ -2526,26 +1851,17 @@ if (landGrid) {
       label.appendChild(input);
 
       const button =
-        document.createElement(
-          "button"
-        );
+        document.createElement("button");
 
-      button.type =
-        "submit";
-
+      button.type = "submit";
       button.className =
         "interaction-button";
-
       button.textContent =
         "Queue Collection";
-
       button.disabled =
         available <= 0;
 
-      form.append(
-        label,
-        button
-      );
+      form.append(label, button);
 
       form.addEventListener(
         "submit",
@@ -2556,9 +1872,7 @@ if (landGrid) {
             Number(input.value);
 
           if (
-            !Number.isFinite(
-              amount
-            ) ||
+            !Number.isFinite(amount) ||
             amount <= 0
           ) {
             return;
@@ -2569,34 +1883,24 @@ if (landGrid) {
               await api(
                 `/api/facilities/${
                   encodeURIComponent(
-                    selection
-                      .instance
+                    selection.instance
                       .instance_id
                   )
                 }/collect`,
                 {
-                  method:
-                    "POST",
-
+                  method: "POST",
                   body:
-                    JSON.stringify(
-                      {
-                        resource_id:
-                          o.resourceId,
-
-                        amount,
-
-                        source_field:
-                          o.sourceField,
-                      }
-                    ),
+                    JSON.stringify({
+                      resource_id:
+                        o.resourceId,
+                      amount,
+                      source_field:
+                        o.sourceField,
+                    }),
                 }
               );
 
-            renderState(
-              result.state
-            );
-
+            renderState(result.state);
             refreshOpenInspector();
 
             statusLine.textContent =
@@ -2608,15 +1912,8 @@ if (landGrid) {
         }
       );
 
-      card.append(
-        h,
-        stats,
-        form
-      );
-
-      inspectorContent.appendChild(
-        card
-      );
+      card.append(h, stats, form);
+      inspectorContent.appendChild(card);
     }
   }
 
@@ -2628,14 +1925,10 @@ if (landGrid) {
     const house =
       simulationState?.house;
 
-    if (!house) {
-      return;
-    }
+    if (!house) return;
 
     const intro =
-      document.createElement(
-        "p"
-      );
+      document.createElement("p");
 
     intro.className =
       "contents-message";
@@ -2643,25 +1936,18 @@ if (landGrid) {
     intro.textContent =
       "Submitting a pickup reserves the household waste immediately and queues a physical pickup task.";
 
-    inspectorContent.appendChild(
-      intro
-    );
+    inspectorContent.appendChild(intro);
 
     for (
       const stream
       of [
         {
-          id:
-            "kitchen_waste",
-
-          label:
-            "Kitchen waste",
+          id: "kitchen_waste",
+          label: "Kitchen waste",
         },
-
         {
           id:
             "carbonaceous_plant_waste",
-
           label:
             "Household paper waste (browns)",
         },
@@ -2669,49 +1955,37 @@ if (landGrid) {
     ) {
       const available =
         Number(
-          house.outputs
-            ?.[stream.id] ??
+          house.outputs?.[stream.id] ??
           0
         );
 
       const carried =
         Number(
-          simulationState
-            ?.player
+          simulationState?.player
             ?.inventory
             ?.[stream.id] ??
           0
         );
 
       const card =
-        document.createElement(
-          "section"
-        );
+        document.createElement("section");
 
       card.className =
         "contents-row";
 
-      if (
-        focus ===
-        stream.id
-      ) {
+      if (focus === stream.id) {
         card.classList.add(
           "is-focused"
         );
       }
 
       const h =
-        document.createElement(
-          "h3"
-        );
+        document.createElement("h3");
 
-      h.textContent =
-        stream.label;
+      h.textContent = stream.label;
 
       const p =
-        document.createElement(
-          "p"
-        );
+        document.createElement("p");
 
       p.className =
         "contents-stats";
@@ -2725,31 +1999,24 @@ if (landGrid) {
         )} lb`;
 
       const form =
-        document.createElement(
-          "form"
-        );
+        document.createElement("form");
 
       form.className =
         "contents-form";
 
       const label =
-        document.createElement(
-          "label"
-        );
+        document.createElement("label");
 
       label.textContent =
         "Amount to pick up (lb)";
 
       const input =
-        document.createElement(
-          "input"
-        );
+        document.createElement("input");
 
       input.type = "number";
       input.min = "0";
       input.step = "0.1";
-      input.max =
-        String(available);
+      input.max = String(available);
 
       input.value =
         available > 0
@@ -2767,26 +2034,16 @@ if (landGrid) {
       label.appendChild(input);
 
       const b =
-        document.createElement(
-          "button"
-        );
+        document.createElement("button");
 
-      b.type =
-        "submit";
-
+      b.type = "submit";
       b.className =
         "interaction-button primary";
-
-      b.textContent =
-        "Queue Pickup";
-
+      b.textContent = "Queue Pickup";
       b.disabled =
         available <= 0;
 
-      form.append(
-        label,
-        b
-      );
+      form.append(label, b);
 
       form.addEventListener(
         "submit",
@@ -2798,27 +2055,20 @@ if (landGrid) {
               await api(
                 "/api/house/pickup",
                 {
-                  method:
-                    "POST",
-
+                  method: "POST",
                   body:
-                    JSON.stringify(
-                      {
-                        resource_id:
-                          stream.id,
-
-                        amount:
-                          Number(
-                            input.value
-                          ),
-                      }
-                    ),
+                    JSON.stringify({
+                      resource_id:
+                        stream.id,
+                      amount:
+                        Number(
+                          input.value
+                        ),
+                    }),
                 }
               );
 
-            renderState(
-              result.state
-            );
+            renderState(result.state);
 
             renderHouseContentsManager(
               stream.id
@@ -2830,51 +2080,37 @@ if (landGrid) {
         }
       );
 
-      card.append(
-        h,
-        p,
-        form
-      );
-
-      inspectorContent.appendChild(
-        card
-      );
+      card.append(h, p, form);
+      inspectorContent.appendChild(card);
     }
   }
 
   function storageResourceIds() {
     return [
-      ...new Set(
-        [
-          ...Object.keys(
-            simulationState
-              ?.house
-              ?.storage ??
-            {}
-          ),
-
-          ...Object.keys(
-            simulationState
-              ?.player
-              ?.inventory ??
-            {}
-          ),
-        ]
-      ),
+      ...new Set([
+        ...Object.keys(
+          simulationState?.house
+            ?.storage ??
+          {}
+        ),
+        ...Object.keys(
+          simulationState?.player
+            ?.inventory ??
+          {}
+        ),
+      ]),
     ]
       .filter(
         (id) =>
           Number(
-            simulationState
-              ?.house
+            simulationState?.house
               ?.storage
               ?.[id] ??
             0
           ) >
             1e-9 ||
           Number(
-            simulationState
-              ?.player
+            simulationState?.player
               ?.inventory
               ?.[id] ??
             0
@@ -2894,18 +2130,37 @@ if (landGrid) {
     inspectorContent.replaceChildren();
 
     const intro =
-      document.createElement(
-        "p"
-      );
+      document.createElement("p");
 
     intro.className =
       "contents-message";
 
     intro.textContent =
-      "Pickup and drop-off instructions are queued and take one simulated minute of handling after travel.";
+      "Pickup and drop-off instructions are queued and take one simulated minute of handling after travel. Eggs delivered here are immediately converted to grocery credit at $0.20 per egg.";
+
+    inspectorContent.appendChild(intro);
+
+    const groceryNote =
+      document.createElement("p");
+
+    groceryNote.className =
+      "contents-stats";
+
+    groceryNote.textContent =
+      `Available grocery credit: $${formatAmount(
+        simulationState?.household
+          ?.grocery_credit_usd ??
+        0,
+        2
+      )} · Cumulative savings: $${formatAmount(
+        simulationState?.household
+          ?.cumulative_grocery_savings_usd ??
+        0,
+        2
+      )}`;
 
     inspectorContent.appendChild(
-      intro
+      groceryNote
     );
 
     const ids =
@@ -2913,9 +2168,7 @@ if (landGrid) {
 
     if (!ids.length) {
       const p =
-        document.createElement(
-          "p"
-        );
+        document.createElement("p");
 
       p.className =
         "contents-message";
@@ -2923,19 +2176,13 @@ if (landGrid) {
       p.textContent =
         "House Storage is empty.";
 
-      inspectorContent.appendChild(
-        p
-      );
+      inspectorContent.appendChild(p);
     }
 
-    for (
-      const id
-      of ids
-    ) {
+    for (const id of ids) {
       const stored =
         Number(
-          simulationState
-            ?.house
+          simulationState?.house
             ?.storage
             ?.[id] ??
           0
@@ -2943,8 +2190,7 @@ if (landGrid) {
 
       const carried =
         Number(
-          simulationState
-            ?.player
+          simulationState?.player
             ?.inventory
             ?.[id] ??
           0
@@ -2954,25 +2200,19 @@ if (landGrid) {
         resourceUnit(id);
 
       const card =
-        document.createElement(
-          "section"
-        );
+        document.createElement("section");
 
       card.className =
         "contents-row";
 
       const h =
-        document.createElement(
-          "h3"
-        );
+        document.createElement("h3");
 
       h.textContent =
         resourceLabel(id);
 
       const p =
-        document.createElement(
-          "p"
-        );
+        document.createElement("p");
 
       p.className =
         "contents-stats";
@@ -2986,17 +2226,13 @@ if (landGrid) {
         )} ${unit}`;
 
       const controls =
-        document.createElement(
-          "div"
-        );
+        document.createElement("div");
 
       controls.className =
         "storage-transfer-controls";
 
       const input =
-        document.createElement(
-          "input"
-        );
+        document.createElement("input");
 
       input.type = "number";
       input.min = "0";
@@ -3012,36 +2248,24 @@ if (landGrid) {
           : "0.1";
 
       const pickup =
-        document.createElement(
-          "button"
-        );
+        document.createElement("button");
 
-      pickup.type =
-        "button";
-
+      pickup.type = "button";
       pickup.className =
         "interaction-button primary";
-
       pickup.textContent =
         "Queue Pickup";
-
       pickup.disabled =
         stored <= 0;
 
       const drop =
-        document.createElement(
-          "button"
-        );
+        document.createElement("button");
 
-      drop.type =
-        "button";
-
+      drop.type = "button";
       drop.className =
         "interaction-button";
-
       drop.textContent =
         "Queue Drop Off";
-
       drop.disabled =
         carried <= 0;
 
@@ -3052,30 +2276,20 @@ if (landGrid) {
               await api(
                 "/api/house/storage/transfer",
                 {
-                  method:
-                    "POST",
-
+                  method: "POST",
                   body:
-                    JSON.stringify(
-                      {
-                        resource_id:
-                          id,
-
-                        amount:
-                          Number(
-                            input.value
-                          ),
-
-                        direction,
-                      }
-                    ),
+                    JSON.stringify({
+                      resource_id: id,
+                      amount:
+                        Number(
+                          input.value
+                        ),
+                      direction,
+                    }),
                 }
               );
 
-            renderState(
-              result.state
-            );
-
+            renderState(result.state);
             renderHouseStorageManager();
           } catch (error) {
             statusLine.textContent =
@@ -3105,50 +2319,36 @@ if (landGrid) {
         controls
       );
 
-      inspectorContent.appendChild(
-        card
-      );
+      inspectorContent.appendChild(card);
     }
 
     const order =
-      document.createElement(
-        "button"
-      );
+      document.createElement("button");
 
-    order.type =
-      "button";
-
+    order.type = "button";
     order.className =
       "interaction-button order-shortcut";
-
     order.textContent =
       "Order Supplies";
 
     order.addEventListener(
       "click",
       () => {
-        inspectorMode =
-          "order";
-
+        inspectorMode = "order";
         inspectorTitle.textContent =
           "Order Supplies";
-
         renderOrderInterface();
       }
     );
 
-    inspectorContent.appendChild(
-      order
-    );
+    inspectorContent.appendChild(order);
   }
 
   function renderOrderInterface() {
     inspectorContent.replaceChildren();
 
     const intro =
-      document.createElement(
-        "p"
-      );
+      document.createElement("p");
 
     intro.className =
       "contents-message";
@@ -3156,55 +2356,39 @@ if (landGrid) {
     intro.textContent =
       "Orders are currently free and delivered instantly to House Storage.";
 
-    inspectorContent.appendChild(
-      intro
-    );
+    inspectorContent.appendChild(intro);
 
     for (
-      const [
-        id,
-        spec,
-      ]
+      const [id, spec]
       of Object.entries(
-        simulationState
-          ?.order_catalog ??
+        simulationState?.order_catalog ??
         {}
       )
     ) {
       const card =
-        document.createElement(
-          "section"
-        );
+        document.createElement("section");
 
       card.className =
         "contents-row order-row";
 
       const h =
-        document.createElement(
-          "h3"
-        );
+        document.createElement("h3");
 
       h.textContent =
         spec.name ??
         resourceLabel(id);
 
       const p =
-        document.createElement(
-          "p"
-        );
+        document.createElement("p");
 
       p.className =
         "contents-stats";
 
       p.textContent =
         `House Storage: ${formatAmount(
-          simulationState
-            ?.house
+          simulationState?.house
             ?.storage
-            ?.[
-              spec.resource_id ??
-              id
-            ] ??
+            ?.[spec.resource_id ?? id] ??
           0
         )} ${
           spec.unit ??
@@ -3212,17 +2396,13 @@ if (landGrid) {
         }`;
 
       const form =
-        document.createElement(
-          "form"
-        );
+        document.createElement("form");
 
       form.className =
         "contents-form";
 
       const label =
-        document.createElement(
-          "label"
-        );
+        document.createElement("label");
 
       label.textContent =
         `Quantity (${
@@ -3231,40 +2411,27 @@ if (landGrid) {
         })`;
 
       const input =
-        document.createElement(
-          "input"
-        );
+        document.createElement("input");
 
       input.type = "number";
       input.min = "0";
-
       input.step =
         spec.integer_only
           ? "1"
           : "0.1";
-
       input.value = "1";
 
       label.appendChild(input);
 
       const b =
-        document.createElement(
-          "button"
-        );
+        document.createElement("button");
 
-      b.type =
-        "submit";
-
+      b.type = "submit";
       b.className =
         "interaction-button primary";
+      b.textContent = "Order";
 
-      b.textContent =
-        "Order";
-
-      form.append(
-        label,
-        b
-      );
+      form.append(label, b);
 
       form.addEventListener(
         "submit",
@@ -3276,28 +2443,19 @@ if (landGrid) {
               await api(
                 "/api/orders",
                 {
-                  method:
-                    "POST",
-
+                  method: "POST",
                   body:
-                    JSON.stringify(
-                      {
-                        resource_id:
-                          id,
-
-                        amount:
-                          Number(
-                            input.value
-                          ),
-                      }
-                    ),
+                    JSON.stringify({
+                      resource_id: id,
+                      amount:
+                        Number(
+                          input.value
+                        ),
+                    }),
                 }
               );
 
-            renderState(
-              result.state
-            );
-
+            renderState(result.state);
             renderOrderInterface();
           } catch (error) {
             statusLine.textContent =
@@ -3306,15 +2464,8 @@ if (landGrid) {
         }
       );
 
-      card.append(
-        h,
-        p,
-        form
-      );
-
-      inspectorContent.appendChild(
-        card
-      );
+      card.append(h, p, form);
+      inspectorContent.appendChild(card);
     }
   }
 
@@ -3338,35 +2489,27 @@ if (landGrid) {
   walkHereButton.addEventListener(
     "click",
     async () => {
-      if (!selectedMapObject) {
-        return;
-      }
+      if (!selectedMapObject) return;
 
       try {
         const result =
           await api(
             "/api/player/walk",
             {
-              method:
-                "POST",
-
+              method: "POST",
               body:
-                JSON.stringify(
-                  {
-                    column:
-                      selectedMapObject.column,
-
-                    row:
-                      selectedMapObject.row,
-                  }
-                ),
+                JSON.stringify({
+                  column:
+                    selectedMapObject
+                      .column,
+                  row:
+                    selectedMapObject
+                      .row,
+                }),
             }
           );
 
-        renderState(
-          result.state
-        );
-
+        renderState(result.state);
         closeInspector();
         clearMapSelection();
 
@@ -3383,12 +2526,9 @@ if (landGrid) {
     "click",
     async () => {
       const i =
-        selectedMapObject
-          ?.instance;
+        selectedMapObject?.instance;
 
-      if (!i) {
-        return;
-      }
+      if (!i) return;
 
       try {
         const result =
@@ -3399,18 +2539,12 @@ if (landGrid) {
               )
             }/service`,
             {
-              method:
-                "POST",
-
-              body:
-                "{}",
+              method: "POST",
+              body: "{}",
             }
           );
 
-        renderState(
-          result.state
-        );
-
+        renderState(result.state);
         closeInspector();
         clearMapSelection();
 
@@ -3426,33 +2560,25 @@ if (landGrid) {
   manageContentsButton.addEventListener(
     "click",
     () => {
-      if (!selectedMapObject) {
-        return;
-      }
+      if (!selectedMapObject) return;
 
       if (
         selectedMapObject.kind ===
         "house_storage"
       ) {
-        inspectorMode =
-          "storage";
-
+        inspectorMode = "storage";
         renderHouseStorageManager();
       } else if (
         selectedMapObject.kind ===
         "house"
       ) {
-        inspectorMode =
-          "contents";
+        inspectorMode = "contents";
 
         renderHouseContentsManager(
-          selectedMapObject
-            .focusResourceId
+          selectedMapObject.focusResourceId
         );
       } else {
-        inspectorMode =
-          "contents";
-
+        inspectorMode = "contents";
         renderContentsManager(
           selectedMapObject
         );
@@ -3473,38 +2599,25 @@ if (landGrid) {
   function taskTravelMinutes(t) {
     if (
       !t?.target ||
-      t.phase !==
-        "travel"
+      t.phase !== "travel"
     ) {
       return null;
     }
 
     const p =
-      simulationState
-        ?.player
+      simulationState?.player
         ?.position;
 
-    if (!p) {
-      return null;
-    }
+    if (!p) return null;
 
     return Math.max(
       1,
       Math.ceil(
         Math.hypot(
-          Number(
-            t.target.column
-          ) -
-            Number(
-              p.column
-            ),
-
-          Number(
-            t.target.row
-          ) -
-            Number(
-              p.row
-            )
+          Number(t.target.column) -
+            Number(p.column),
+          Number(t.target.row) -
+            Number(p.row)
         ) /
           WALKING_SPEED_TILES_PER_MINUTE
       )
@@ -3523,17 +2636,14 @@ if (landGrid) {
     const travel =
       taskTravelMinutes(t);
 
-    if (
-      travel != null
-    ) {
+    if (travel != null) {
       parts.push(
         `~${travel} min travel`
       );
     }
 
     if (
-      t.phase ===
-      "working"
+      t.phase === "working"
     ) {
       parts.push(
         `${Number(
@@ -3555,9 +2665,7 @@ if (landGrid) {
       );
     }
 
-    return parts.join(
-      " · "
-    );
+    return parts.join(" · ");
   }
 
   async function cancelQueuedTask(id) {
@@ -3568,17 +2676,12 @@ if (landGrid) {
             encodeURIComponent(id)
           }/cancel`,
           {
-            method:
-              "POST",
-
-            body:
-              "{}",
+            method: "POST",
+            body: "{}",
           }
         );
 
-      renderState(
-        result.state
-      );
+      renderState(result.state);
     } catch (error) {
       statusLine.textContent =
         error.message;
@@ -3594,14 +2697,12 @@ if (landGrid) {
     }
 
     const queue =
-      simulationState
-        ?.player
+      simulationState?.player
         ?.task_queue ??
       [];
 
     const current =
-      queue[0] ??
-      null;
+      queue[0] ?? null;
 
     currentTaskCard.replaceChildren();
 
@@ -3610,39 +2711,26 @@ if (landGrid) {
         "Idle · no current task.";
     } else {
       const s =
-        document.createElement(
-          "strong"
-        );
+        document.createElement("strong");
 
       const d =
-        document.createElement(
-          "span"
-        );
+        document.createElement("span");
 
       s.textContent =
         current.description ??
-        prettyName(
-          current.type
-        );
+        prettyName(current.type);
 
       d.textContent =
         taskDetail(current);
 
-      currentTaskCard.append(
-        s,
-        d
-      );
+      currentTaskCard.append(s, d);
     }
 
     taskQueueList.replaceChildren();
 
-    if (
-      queue.length <= 1
-    ) {
+    if (queue.length <= 1) {
       const p =
-        document.createElement(
-          "p"
-        );
+        document.createElement("p");
 
       p.className =
         "panel-note";
@@ -3650,122 +2738,81 @@ if (landGrid) {
       p.textContent =
         "No waiting tasks.";
 
-      taskQueueList.appendChild(
-        p
-      );
-
+      taskQueueList.appendChild(p);
       return;
     }
 
-    queue
-      .slice(1)
-      .forEach(
-        (t, index) => {
-          const row =
-            document.createElement(
-              "div"
-            );
+    queue.slice(1).forEach(
+      (t, index) => {
+        const row =
+          document.createElement("div");
 
-          row.className =
-            "task-queue-item";
+        row.className =
+          "task-queue-item";
 
-          const text =
-            document.createElement(
-              "div"
-            );
+        const text =
+          document.createElement("div");
 
-          const s =
-            document.createElement(
-              "strong"
-            );
+        const s =
+          document.createElement("strong");
 
-          const d =
-            document.createElement(
-              "span"
-            );
+        const d =
+          document.createElement("span");
 
-          s.textContent =
-            `${index + 1}. ${
-              t.description ??
-              prettyName(
-                t.type
-              )
-            }`;
+        s.textContent =
+          `${index + 1}. ${
+            t.description ??
+            prettyName(t.type)
+          }`;
 
-          d.textContent =
-            taskDetail(t);
+        d.textContent =
+          taskDetail(t);
 
-          text.append(
-            s,
-            d
-          );
+        text.append(s, d);
 
-          const b =
-            document.createElement(
-              "button"
-            );
+        const b =
+          document.createElement("button");
 
-          b.type =
-            "button";
+        b.type = "button";
+        b.className =
+          "task-cancel-button";
+        b.textContent = "Cancel";
 
-          b.className =
-            "task-cancel-button";
+        b.addEventListener(
+          "click",
+          () =>
+            cancelQueuedTask(
+              t.task_id
+            )
+        );
 
-          b.textContent =
-            "Cancel";
-
-          b.addEventListener(
-            "click",
-            () =>
-              cancelQueuedTask(
-                t.task_id
-              )
-          );
-
-          row.append(
-            text,
-            b
-          );
-
-          taskQueueList.appendChild(
-            row
-          );
-        }
-      );
+        row.append(text, b);
+        taskQueueList.appendChild(row);
+      }
+    );
   }
 
   function ensureAvatar() {
-    if (avatar) {
-      return avatar;
-    }
+    if (avatar) return avatar;
 
     avatar =
-      document.createElement(
-        "img"
-      );
+      document.createElement("img");
 
     avatar.id =
       "player-avatar";
-
     avatar.className =
       "player-avatar";
-
     avatar.alt =
       "Homesteader";
-
     avatar.src =
       "/static/assets/sprites/HomesteaderIdle.png";
 
     avatarTooltip =
-      document.createElement(
-        "div"
-      );
+      document.createElement("div");
 
     avatarTooltip.className =
       "player-task-tooltip";
-
-    avatarTooltip.hidden =
-      true;
+    avatarTooltip.hidden = true;
 
     landGrid.append(
       avatar,
@@ -3776,7 +2823,6 @@ if (landGrid) {
       "mouseenter",
       () => {
         updateAvatarTooltip();
-
         avatarTooltip.hidden =
           false;
       }
@@ -3793,10 +2839,7 @@ if (landGrid) {
     return avatar;
   }
 
-  function avatarAsset(
-    task,
-    activity
-  ) {
+  function avatarAsset(task, activity) {
     const phase =
       activity?.phase ??
       task?.phase ??
@@ -3805,36 +2848,23 @@ if (landGrid) {
     const direction =
       activity?.direction ??
       task?.direction ??
-      simulationState
-        ?.player
+      simulationState?.player
         ?.last_direction ??
       "down";
 
-    if (
-      phase ===
-      "working"
-    ) {
+    if (phase === "working") {
       return "/static/assets/sprites/HomesteaderCrouch.png";
     }
 
-    if (
-      phase !==
-      "travel"
-    ) {
+    if (phase !== "travel") {
       return "/static/assets/sprites/HomesteaderIdle.png";
     }
 
-    if (
-      direction ===
-      "up"
-    ) {
+    if (direction === "up") {
       return "/static/assets/sprites/HomesteaderWalkAway.png";
     }
 
-    if (
-      direction ===
-      "down"
-    ) {
+    if (direction === "down") {
       return "/static/assets/sprites/HomesteaderWalkToward.png";
     }
 
@@ -3842,19 +2872,15 @@ if (landGrid) {
   }
 
   function updateAvatarTooltip() {
-    if (!avatarTooltip) {
-      return;
-    }
+    if (!avatarTooltip) return;
 
     const queue =
-      simulationState
-        ?.player
+      simulationState?.player
         ?.task_queue ??
       [];
 
     const current =
-      queue[0] ??
-      null;
+      queue[0] ?? null;
 
     avatarTooltip.replaceChildren();
 
@@ -3862,14 +2888,11 @@ if (landGrid) {
       current
         ? [
             "Homesteader",
-
             current.description ??
               prettyName(
                 current.type
               ),
-
             taskDetail(current),
-
             `${Math.max(
               0,
               queue.length - 1
@@ -3885,10 +2908,7 @@ if (landGrid) {
             "No queued tasks",
           ];
 
-    for (
-      const text
-      of lines
-    ) {
+    for (const text of lines) {
       const el =
         text === "Homesteader"
           ? document.createElement(
@@ -3898,18 +2918,12 @@ if (landGrid) {
               "span"
             );
 
-      el.textContent =
-        text;
-
-      avatarTooltip.appendChild(
-        el
-      );
+      el.textContent = text;
+      avatarTooltip.appendChild(el);
     }
   }
 
-  function renderAvatar(
-    activity = null
-  ) {
+  function renderAvatar(activity = null) {
     const player =
       simulationState?.player;
 
@@ -3919,7 +2933,6 @@ if (landGrid) {
 
       avatar = null;
       avatarTooltip = null;
-
       return;
     }
 
@@ -3928,22 +2941,17 @@ if (landGrid) {
 
     const column =
       Number(
-        player.position
-          ?.column ??
-        0
+        player.position?.column ?? 0
       );
 
     const row =
       Number(
-        player.position
-          ?.row ??
+        player.position?.row ??
         GRID_SIZE - 1
       );
 
     const task =
-      player
-        .task_queue
-        ?.[0] ??
+      player.task_queue?.[0] ??
       player.current_task ??
       null;
 
@@ -3955,33 +2963,18 @@ if (landGrid) {
 
     el.style.left =
       `${
-        (
-          (
-            column +
-            0.5
-          ) /
-          GRID_SIZE
-        ) *
+        ((column + 0.5) / GRID_SIZE) *
         100
       }%`;
 
     el.style.top =
       `${
-        (
-          (
-            row +
-            1
-          ) /
-          GRID_SIZE
-        ) *
+        ((row + 1) / GRID_SIZE) *
         100
       }%`;
 
     el.src =
-      avatarAsset(
-        task,
-        activity
-      );
+      avatarAsset(task, activity);
 
     el.classList.toggle(
       "walk-left",
@@ -3990,8 +2983,7 @@ if (landGrid) {
         task?.phase
       ) ===
         "travel" &&
-      direction ===
-        "left"
+      direction === "left"
     );
 
     if (avatarTooltip) {
@@ -4010,16 +3002,12 @@ if (landGrid) {
       .querySelectorAll(
         ".house-eaves, .house-pickup, .house-storage"
       )
-      .forEach(
-        (e) => e.remove()
-      );
+      .forEach((e) => e.remove());
 
     const house =
       simulationState?.house;
 
-    if (!house) {
-      return;
-    }
+    if (!house) return;
 
     const e =
       house.eaves ??
@@ -4029,9 +3017,7 @@ if (landGrid) {
       };
 
     const eaves =
-      document.createElement(
-        "div"
-      );
+      document.createElement("div");
 
     eaves.className =
       "house-eaves";
@@ -4042,143 +3028,234 @@ if (landGrid) {
     eaves.style.gridRow =
       `${GRID_SIZE} / span 1`;
 
-    landGrid.appendChild(
-      eaves
+    eaves.setAttribute(
+      "aria-label",
+      "House"
     );
 
+    landGrid.appendChild(eaves);
+
+    const makeTooltip =
+      (name, contentLines) => {
+        const tooltip =
+          document.createElement("span");
+
+        tooltip.className =
+          "map-storage-tooltip";
+
+        tooltip.setAttribute(
+          "role",
+          "tooltip"
+        );
+
+        const heading =
+          document.createElement("strong");
+
+        heading.textContent =
+          name;
+
+        tooltip.appendChild(heading);
+
+        const lines =
+          Array.isArray(contentLines)
+            ? contentLines
+            : [contentLines];
+
+        for (const line of lines) {
+          const row =
+            document.createElement("span");
+
+          row.className =
+            "tooltip-contents";
+
+          row.textContent = line;
+          tooltip.appendChild(row);
+        }
+
+        return tooltip;
+      };
+
     for (
-      const [
-        id,
-        label,
-        klass,
-      ]
+      const [id, label, klass]
       of [
         [
           "kitchen_waste",
           "Kitchen waste",
           "kitchen-pickup",
         ],
-
         [
           "carbonaceous_plant_waste",
-          "Paper waste / browns",
+          "Paper waste",
           "paper-pickup",
         ],
       ]
     ) {
-      const p =
-        house
-          .pickup_points
-          ?.[id];
+      const point =
+        house.pickup_points?.[id];
 
-      if (!p) {
-        continue;
-      }
+      if (!point) continue;
 
-      const b =
-        document.createElement(
-          "button"
+      const width =
+        Math.max(
+          1,
+          Number(point.width ?? 1)
         );
 
-      b.type = "button";
+      const height =
+        Math.max(
+          1,
+          Number(point.height ?? 1)
+        );
 
-      b.className =
+      const amount =
+        Number(
+          house.outputs?.[id] ?? 0
+        );
+
+      const button =
+        document.createElement("button");
+
+      button.type = "button";
+
+      button.className =
         `house-pickup ${klass}`;
 
-      b.dataset.resourceId =
+      button.dataset.resourceId =
         id;
 
-      b.style.gridColumn =
+      button.style.gridColumn =
         `${
           Math.floor(
-            Number(p.column)
+            Number(point.column)
           ) +
           1
-        } / span 2`;
+        } / span ${width}`;
 
-      b.style.gridRow =
+      button.style.gridRow =
         `${
           Math.floor(
-            Number(p.row)
+            Number(point.row)
           ) +
           1
-        } / span 2`;
+        } / span ${height}`;
 
-      b.innerHTML =
-        `<span class="pickup-icon">${
-          id ===
-            "kitchen_waste"
-            ? "♻"
-            : "▤"
-        }</span>` +
-        `<span>${label}</span>` +
-        `<strong>${formatAmount(
-          house.outputs
-            ?.[id] ??
-          0,
+      button.setAttribute(
+        "aria-label",
+        `${label}: ${formatAmount(
+          amount,
           2
-        )} lb</strong>`;
-
-      landGrid.appendChild(
-        b
+        )} lb ready`
       );
+
+      button.appendChild(
+        makeTooltip(
+          label,
+          `${formatAmount(
+            amount,
+            2
+          )} lb ready`
+        )
+      );
+
+      landGrid.appendChild(button);
     }
 
-    const p =
+    const point =
       house.storage_point ??
       {
         column: 20,
         row: 40,
+        width: 2,
+        height: 2,
       };
 
-    const storage =
-      document.createElement(
-        "button"
+    const width =
+      Math.max(
+        1,
+        Number(point.width ?? 2)
       );
 
-    storage.type =
+    const height =
+      Math.max(
+        1,
+        Number(point.height ?? 2)
+      );
+
+    const storage =
+      house.storage ?? {};
+
+    const storedEntries =
+      Object.entries(storage)
+        .filter(
+          ([, amount]) =>
+            Number(amount) > 1e-9
+        )
+        .sort(
+          ([a], [b]) =>
+            resourceLabel(a)
+              .localeCompare(
+                resourceLabel(b)
+              )
+        );
+
+    const storageButton =
+      document.createElement("button");
+
+    storageButton.type =
       "button";
 
-    storage.className =
+    storageButton.className =
       "house-storage";
 
-    storage.style.gridColumn =
+    storageButton.style.gridColumn =
       `${
         Math.floor(
-          Number(p.column)
+          Number(point.column)
         ) +
         1
-      } / span 3`;
+      } / span ${width}`;
 
-    storage.style.gridRow =
+    storageButton.style.gridRow =
       `${
         Math.floor(
-          Number(p.row)
+          Number(point.row)
         ) +
         1
-      } / span 2`;
+      } / span ${height}`;
 
-    const count =
-      Object.values(
-        house.storage ??
-        {}
-      ).filter(
-        (v) =>
-          Number(v) >
-          1e-9
-      ).length;
+    const storageLines =
+      storedEntries.length
+        ? storedEntries.map(
+            ([id, amount]) =>
+              `${resourceLabel(
+                id
+              )}: ${formatAmount(
+                amount,
+                isDiscrete(id)
+                  ? 0
+                  : 2
+              )} ${resourceUnit(id)}`
+          )
+        : ["Empty"];
 
-    storage.innerHTML =
-      `<span class="pickup-icon">▣</span>` +
-      `<span>House Storage</span>` +
-      `<strong>${count} type${
-        count === 1
-          ? ""
-          : "s"
-      }</strong>`;
+    storageButton.setAttribute(
+      "aria-label",
+      storedEntries.length
+        ? `House Storage. ${storageLines.join(
+            "; "
+          )}`
+        : "House Storage. Empty."
+    );
+
+    storageButton.appendChild(
+      makeTooltip(
+        "House Storage",
+        storageLines
+      )
+    );
 
     landGrid.appendChild(
-      storage
+      storageButton
     );
   }
 
@@ -4187,38 +3264,24 @@ if (landGrid) {
       .querySelectorAll(
         ".placed-building"
       )
-      .forEach(
-        (e) => e.remove()
-      );
+      .forEach((e) => e.remove());
 
     placements =
       (
-        simulationState
-          ?.instances ??
+        simulationState?.instances ??
         []
-      ).map(
-        (i) => ({
-          ...i,
-        })
-      );
+      ).map((i) => ({ ...i }));
 
-    for (
-      const i
-      of placements
-    ) {
+    for (const i of placements) {
       const d =
         definitionsById.get(
           i.facility_id
         );
 
-      if (!d) {
-        continue;
-      }
+      if (!d) continue;
 
       const image =
-        document.createElement(
-          "img"
-        );
+        document.createElement("img");
 
       image.className =
         "building-sprite placed-building";
@@ -4226,8 +3289,7 @@ if (landGrid) {
       image.src =
         `/static/assets/sprites/${d.image}`;
 
-      image.alt =
-        d.name;
+      image.alt = d.name;
 
       image.dataset.instanceId =
         i.instance_id;
@@ -4238,17 +3300,13 @@ if (landGrid) {
       image.style.gridRow =
         `${i.row + 1} / span ${i.height}`;
 
-      landGrid.appendChild(
-        image
-      );
+      landGrid.appendChild(image);
     }
 
     renderHouse();
 
     if (avatar) {
-      landGrid.appendChild(
-        avatar
-      );
+      landGrid.appendChild(avatar);
     }
 
     if (avatarTooltip) {
@@ -4274,7 +3332,6 @@ if (landGrid) {
         b.daily_flows ??
         p.daily_flows ??
         {},
-
       electricity:
         b.electricity_kwh_per_day ??
         p.electricity_kwh_per_day ??
@@ -4287,15 +3344,13 @@ if (landGrid) {
 
     const entries =
       Object.entries(
-        simulationState
-          ?.player
+        simulationState?.player
           ?.inventory ??
         {}
       )
         .filter(
           ([, v]) =>
-            Number(v) >
-            1e-9
+            Number(v) > 1e-9
         )
         .sort(
           ([a], [b]) =>
@@ -4307,25 +3362,17 @@ if (landGrid) {
 
     if (!entries.length) {
       const li =
-        document.createElement(
-          "li"
-        );
+        document.createElement("li");
 
       li.textContent =
         "Nothing carried.";
 
-      playerInventoryList.appendChild(
-        li
-      );
-
+      playerInventoryList.appendChild(li);
       return;
     }
 
     for (
-      const [
-        id,
-        amount,
-      ]
+      const [id, amount]
       of entries
     ) {
       addListItem(
@@ -4345,6 +3392,9 @@ if (landGrid) {
     biologicalResourceList
       ?.replaceChildren();
 
+    yardResourceList
+      ?.replaceChildren();
+
     utilityResourceList
       ?.replaceChildren();
 
@@ -4354,10 +3404,7 @@ if (landGrid) {
       {};
 
     for (
-      const [
-        id,
-        r,
-      ]
+      const [id, r]
       of Object.entries(
         overview.biological_materials ??
         {}
@@ -4370,12 +3417,8 @@ if (landGrid) {
       )
     ) {
       if (
-        r.behavior !==
-          "stock" ||
-        Number(
-          r.amount ??
-          0
-        ) <=
+        r.behavior !== "stock" ||
+        Number(r.amount ?? 0) <=
           1e-9
       ) {
         continue;
@@ -4385,7 +3428,6 @@ if (landGrid) {
         biologicalResourceList,
         r.name ??
           resourceLabel(id),
-
         `${formatAmount(
           r.amount,
           r.quantity_mode ===
@@ -4393,8 +3435,7 @@ if (landGrid) {
             ? 0
             : 4
         )} ${
-          r.unit ??
-          ""
+          r.unit ?? ""
         }`.trim()
       );
     }
@@ -4404,21 +3445,61 @@ if (landGrid) {
       !biologicalResourceList.children.length
     ) {
       const li =
-        document.createElement(
-          "li"
-        );
+        document.createElement("li");
 
       li.textContent =
         "No physical stocks yet.";
 
-      biologicalResourceList.appendChild(
-        li
+      biologicalResourceList.appendChild(li);
+    }
+
+    for (
+      const [id, r]
+      of Object.entries(
+        overview.yard_forage ??
+        {}
+      ).sort(
+        ([, a], [, b]) =>
+          String(a.name)
+            .localeCompare(
+              String(b.name)
+            )
+      )
+    ) {
+      addListItem(
+        yardResourceList,
+        r.name ??
+          resourceLabel(id),
+        `${formatAmount(
+          r.amount ?? 0,
+          4
+        )} / ${formatAmount(
+          r.capacity ?? 0,
+          4
+        )} ${
+          r.unit ?? "lb"
+        } · ${formatAmount(
+          r.daily_generation ?? 0,
+          4
+        )}/day`
       );
     }
 
+    if (
+      yardResourceList &&
+      !yardResourceList.children.length
+    ) {
+      const li =
+        document.createElement("li");
+
+      li.textContent =
+        "No yard forage available.";
+
+      yardResourceList.appendChild(li);
+    }
+
     const u =
-      overview.utilities ??
-      {};
+      overview.utilities ?? {};
 
     const e =
       u.electricity_balance;
@@ -4449,18 +3530,13 @@ if (landGrid) {
       );
     }
 
-    if (
-      u.municipal_water
-    ) {
+    if (u.municipal_water) {
       addListItem(
         utilityResourceList,
-        u.municipal_water
-          .name ??
+        u.municipal_water.name ??
           "Municipal potable water",
-
         `${formatAmount(
-          u.municipal_water
-            .amount
+          u.municipal_water.amount
         )} gal/h`
       );
     }
@@ -4473,12 +3549,10 @@ if (landGrid) {
       addListItem(
         utilityResourceList,
         np.name,
-
         `${formatAmount(
           np.amount
         )} ${
-          np.unit ??
-          ""
+          np.unit ?? ""
         }`.trim()
       );
     }
@@ -4525,8 +3599,7 @@ if (landGrid) {
       householdList,
       "Money",
       `$${formatAmount(
-        simulationState
-          ?.household
+        simulationState?.household
           ?.money ??
         0,
         2
@@ -4548,12 +3621,10 @@ if (landGrid) {
         playerList,
         "Position",
         `${formatAmount(
-          player.position
-            ?.column,
+          player.position?.column,
           2
         )}, ${formatAmount(
-          player.position
-            ?.row,
+          player.position?.row,
           2
         )}`
       );
@@ -4561,16 +3632,13 @@ if (landGrid) {
       addListItem(
         playerList,
         "Activity",
-        player.task_queue
-          ?.[0]
+        player.task_queue?.[0]
           ? `${
-              player
-                .task_queue[0]
+              player.task_queue[0]
                 .description
             } — ${
               taskPhaseLabel(
-                player
-                  .task_queue[0]
+                player.task_queue[0]
               )
             }`
           : "Idle"
@@ -4580,8 +3648,7 @@ if (landGrid) {
         playerList,
         "Tasks",
         String(
-          player
-            .task_queue
+          player.task_queue
             ?.length ??
           0
         )
@@ -4607,11 +3674,33 @@ if (landGrid) {
 
     addListItem(
       consumptionList,
-      "Groceries",
+      "Baseline groceries",
       `$${formatAmount(
         flows.groceries_usd,
         2
       )} / day`
+    );
+
+    addListItem(
+      consumptionList,
+      "Egg grocery credit available",
+      `$${formatAmount(
+        simulationState?.household
+          ?.grocery_credit_usd ??
+        0,
+        2
+      )}`
+    );
+
+    addListItem(
+      consumptionList,
+      "Cumulative grocery savings",
+      `$${formatAmount(
+        simulationState?.household
+          ?.cumulative_grocery_savings_usd ??
+        0,
+        2
+      )}`
     );
 
     addListItem(
@@ -4638,18 +3727,10 @@ if (landGrid) {
     electricityList.replaceChildren();
 
     for (
-      const [
-        key,
-        value,
-      ]
-      of Object.entries(
-        electricity
-      )
+      const [key, value]
+      of Object.entries(electricity)
     ) {
-      if (
-        key !==
-        "total"
-      ) {
+      if (key !== "total") {
         addListItem(
           electricityList,
           prettyName(key),
@@ -4668,13 +3749,8 @@ if (landGrid) {
     wasteList.replaceChildren();
 
     for (
-      const [
-        key,
-        value,
-      ]
-      of Object.entries(
-        flows
-      )
+      const [key, value]
+      of Object.entries(flows)
     ) {
       if (
         [
@@ -4686,13 +3762,9 @@ if (landGrid) {
       }
 
       const unit =
-        key.endsWith(
-          "_gal"
-        )
+        key.endsWith("_gal")
           ? "gal / day"
-          : key.endsWith(
-              "_lb"
-            )
+          : key.endsWith("_lb")
             ? "lb / day"
             : "/ day";
 
@@ -4719,21 +3791,14 @@ if (landGrid) {
 
     if (!placements.length) {
       const li =
-        document.createElement(
-          "li"
-        );
+        document.createElement("li");
 
       li.textContent =
         "No placed facilities.";
 
-      operationsList.appendChild(
-        li
-      );
+      operationsList.appendChild(li);
     } else {
-      for (
-        const i
-        of placements
-      ) {
+      for (const i of placements) {
         const d =
           definitionsById.get(
             i.facility_id
@@ -4814,8 +3879,7 @@ if (landGrid) {
         selectedMapObject.row
       );
 
-    selectedMapObject.instance =
-      i;
+    selectedMapObject.instance = i;
 
     selectedMapObject.definition =
       i
@@ -4823,8 +3887,7 @@ if (landGrid) {
             i.facility_id
           )
         : definitionsById.get(
-            simulationState
-              ?.map
+            simulationState?.map
               ?.default_tile
           );
 
@@ -4855,13 +3918,11 @@ if (landGrid) {
     activity = null
   ) {
     simulationState = state;
-
     definitionsById.clear();
 
     for (
       const d
-      of state
-        ?.facility_definitions ??
+      of state?.facility_definitions ??
       []
     ) {
       definitionsById.set(
@@ -4913,16 +3974,10 @@ if (landGrid) {
   landGrid.addEventListener(
     "click",
     async (event) => {
-      if (!gameLoaded) {
-        return;
-      }
+      if (!gameLoaded) return;
 
-      if (
-        suppressNextMapClick
-      ) {
-        suppressNextMapClick =
-          false;
-
+      if (suppressNextMapClick) {
+        suppressNextMapClick = false;
         return;
       }
 
@@ -4953,32 +4008,24 @@ if (landGrid) {
 
       if (storage) {
         if (selectedBuildId) {
-          cancelPlacement(
-            {
-              silent: true,
-            }
-          );
+          cancelPlacement({
+            silent: true,
+          });
         }
 
-        openHouseStorage(
-          "storage"
-        );
-
+        openHouseStorage("storage");
         return;
       }
 
       if (pickup) {
         if (selectedBuildId) {
-          cancelPlacement(
-            {
-              silent: true,
-            }
-          );
+          cancelPlacement({
+            silent: true,
+          });
         }
 
         openHouseSelection(
-          pickup.dataset
-            .resourceId
+          pickup.dataset.resourceId
         );
 
         return;
@@ -4986,32 +4033,23 @@ if (landGrid) {
 
       if (eaves) {
         if (selectedBuildId) {
-          cancelPlacement(
-            {
-              silent: true,
-            }
-          );
+          cancelPlacement({
+            silent: true,
+          });
         }
 
         openHouseSelection();
-
         return;
       }
 
       if (facility) {
         if (selectedBuildId) {
-          cancelPlacement(
-            {
-              silent: true,
-            }
-          );
+          cancelPlacement({
+            silent: true,
+          });
         }
 
-        openSelection(
-          column,
-          row
-        );
-
+        openSelection(column, row);
         return;
       }
 
@@ -5020,14 +4058,10 @@ if (landGrid) {
           column,
           row
         );
-
         return;
       }
 
-      openSelection(
-        column,
-        row
-      );
+      openSelection(column, row);
     }
   );
 
@@ -5036,8 +4070,7 @@ if (landGrid) {
       "change",
       () => {
         if (
-          runtimeTimer !==
-            null &&
+          runtimeTimer !== null &&
           !interactionOpen
         ) {
           setRuntimeRunning(
@@ -5111,8 +4144,7 @@ if (landGrid) {
                 p.id ===
                 tab.dataset.panel;
 
-              p.hidden =
-                !a;
+              p.hidden = !a;
 
               p.classList.toggle(
                 "is-active",
@@ -5127,10 +4159,7 @@ if (landGrid) {
   document.addEventListener(
     "keydown",
     (event) => {
-      if (
-        event.key ===
-        "Escape"
-      ) {
+      if (event.key === "Escape") {
         closeInspector();
         clearMapSelection();
         cancelPlacement();
@@ -5146,8 +4175,7 @@ if (landGrid) {
         )
       ) {
         setMapZoom(
-          mapZoom +
-          ZOOM_STEP
+          mapZoom + ZOOM_STEP
         );
       }
 
@@ -5161,8 +4189,7 @@ if (landGrid) {
         )
       ) {
         setMapZoom(
-          mapZoom -
-          ZOOM_STEP
+          mapZoom - ZOOM_STEP
         );
       }
 
@@ -5177,21 +4204,14 @@ if (landGrid) {
     }
   );
 
-  function setGameLoaded(
-    name,
-    state
-  ) {
+  function setGameLoaded(name, state) {
     gameLoaded = true;
 
     currentGameName.textContent =
-      name ||
-      "Current Game";
+      name || "Current Game";
 
-    startupOverlay.hidden =
-      true;
-
-    startupStatus.textContent =
-      "";
+    startupOverlay.hidden = true;
+    startupStatus.textContent = "";
 
     renderState(state);
 
@@ -5205,22 +4225,16 @@ if (landGrid) {
     startupStatus.textContent =
       "Creating new game…";
 
-    newGameButton.disabled =
-      true;
-
-    loadGameButton.disabled =
-      true;
+    newGameButton.disabled = true;
+    loadGameButton.disabled = true;
 
     try {
       const r =
         await api(
           "/api/new-game",
           {
-            method:
-              "POST",
-
-            body:
-              "{}",
+            method: "POST",
+            body: "{}",
           }
         );
 
@@ -5232,20 +4246,14 @@ if (landGrid) {
       startupStatus.textContent =
         error.message;
     } finally {
-      newGameButton.disabled =
-        false;
-
-      loadGameButton.disabled =
-        false;
+      newGameButton.disabled = false;
+      loadGameButton.disabled = false;
     }
   }
 
   async function showSavedGames() {
-    startupMainActions.hidden =
-      true;
-
-    loadGamePanel.hidden =
-      false;
+    startupMainActions.hidden = true;
+    loadGamePanel.hidden = false;
 
     startupStatus.textContent =
       "Loading saved games…";
@@ -5254,17 +4262,11 @@ if (landGrid) {
 
     try {
       const r =
-        await api(
-          "/api/saves"
-        );
+        await api("/api/saves");
 
-      if (
-        !r.saves?.length
-      ) {
+      if (!r.saves?.length) {
         const p =
-          document.createElement(
-            "p"
-          );
+          document.createElement("p");
 
         p.className =
           "no-saves-message";
@@ -5272,34 +4274,21 @@ if (landGrid) {
         p.textContent =
           "No saved games found.";
 
-        saveGameList.appendChild(
-          p
-        );
+        saveGameList.appendChild(p);
       } else {
-        for (
-          const save
-          of r.saves
-        ) {
+        for (const save of r.saves) {
           const b =
-            document.createElement(
-              "button"
-            );
+            document.createElement("button");
 
-          b.type =
-            "button";
-
+          b.type = "button";
           b.className =
             "save-game-option";
 
           const strong =
-            document.createElement(
-              "strong"
-            );
+            document.createElement("strong");
 
           const small =
-            document.createElement(
-              "small"
-            );
+            document.createElement("small");
 
           strong.textContent =
             save.label;
@@ -5307,27 +4296,19 @@ if (landGrid) {
           small.textContent =
             save.path;
 
-          b.append(
-            strong,
-            small
-          );
+          b.append(strong, small);
 
           b.addEventListener(
             "click",
             () =>
-              loadSavedGame(
-                save.id
-              )
+              loadSavedGame(save.id)
           );
 
-          saveGameList.appendChild(
-            b
-          );
+          saveGameList.appendChild(b);
         }
       }
 
-      startupStatus.textContent =
-        "";
+      startupStatus.textContent = "";
     } catch (error) {
       startupStatus.textContent =
         error.message;
@@ -5343,16 +4324,11 @@ if (landGrid) {
         await api(
           "/api/load-game",
           {
-            method:
-              "POST",
-
+            method: "POST",
             body:
-              JSON.stringify(
-                {
-                  save_id:
-                    id,
-                }
-              ),
+              JSON.stringify({
+                save_id: id,
+              }),
           }
         );
 
@@ -5379,33 +4355,21 @@ if (landGrid) {
   backToStartButton.addEventListener(
     "click",
     () => {
-      loadGamePanel.hidden =
-        true;
-
-      startupMainActions.hidden =
-        false;
-
-      startupStatus.textContent =
-        "";
+      loadGamePanel.hidden = true;
+      startupMainActions.hidden = false;
+      startupStatus.textContent = "";
     }
   );
 
   async function initialize() {
     renderMapTransform();
-
-    setRuntimeRunning(
-      false
-    );
+    setRuntimeRunning(false);
 
     try {
       const s =
-        await api(
-          "/api/session"
-        );
+        await api("/api/session");
 
-      if (
-        s.game_loaded
-      ) {
+      if (s.game_loaded) {
         const state =
           await api(
             "/api/simulation"
