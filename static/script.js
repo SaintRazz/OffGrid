@@ -1210,6 +1210,38 @@ if (landGrid) {
       );
   }
 
+  // HTML max validates on submit; clamp while editing as well.
+  function capTransferInput(input, maximum, discrete = false) {
+    const limit = Math.max(0, discrete ? Math.floor(maximum) : maximum);
+    input.max = String(limit);
+    input.step = discrete ? "1" : "any";
+    input.disabled = limit <= 0;
+    const clamp = () => {
+      if (input.value === "") return;
+      const value = Number(input.value);
+      input.value = String(Number.isFinite(value)
+        ? Math.min(limit, Math.max(0, discrete ? Math.floor(value) : value))
+        : 0);
+    };
+    input.addEventListener("input", clamp);
+    input.addEventListener("change", clamp);
+    clamp();
+    return limit;
+  }
+
+  function appendTransferAll(form, input, text) {
+    const all = document.createElement("button");
+    all.type = "button";
+    all.className = "interaction-button";
+    all.textContent = text;
+    all.disabled = input.disabled;
+    all.addEventListener("click", () => {
+      input.value = input.max;
+      form.requestSubmit();
+    });
+    form.appendChild(all);
+  }
+
   function queuedCollectionAmount(
     instanceId,
     resourceId,
@@ -1699,7 +1731,9 @@ if (landGrid) {
       button.disabled =
         maximum <= 0;
 
+      capTransferInput(input, Number(input.max), isDiscrete(o.resourceId));
       form.append(label, button);
+      appendTransferAll(form, input, "Drop off all");
 
       form.addEventListener(
         "submit",
@@ -1861,7 +1895,9 @@ if (landGrid) {
       button.disabled =
         available <= 0;
 
+      capTransferInput(input, Number(input.max), isDiscrete(o.resourceId));
       form.append(label, button);
+      appendTransferAll(form, input, "Pick up all");
 
       form.addEventListener(
         "submit",
@@ -2043,7 +2079,9 @@ if (landGrid) {
       b.disabled =
         available <= 0;
 
+      capTransferInput(input, available);
       form.append(label, b);
+      appendTransferAll(form, input, "Pick up all");
 
       form.addEventListener(
         "submit",
@@ -2225,99 +2263,47 @@ if (landGrid) {
           carried
         )} ${unit}`;
 
-      const controls =
-        document.createElement("div");
+      card.append(h, p);
 
-      controls.className =
-        "storage-transfer-controls";
+      for (const [direction, available, action, allText] of [
+        ["to_player", stored, "Queue Pickup", "Pick up all"],
+        ["to_house", carried, "Queue Drop Off", "Drop off all"],
+      ]) {
+        const form = document.createElement("form");
+        form.className = "contents-form";
+        const label = document.createElement("label");
+        label.textContent = `${direction === "to_player" ? "Amount to pick up" : "Amount to drop off"} (${unit})`;
+        const input = document.createElement("input");
+        input.type = "number";
+        input.min = "0";
+        input.value = String(Math.min(available, isDiscrete(id) ? 1 : 0.1));
+        const maximum = capTransferInput(input, available, isDiscrete(id));
+        label.appendChild(input);
+        const button = document.createElement("button");
+        button.type = "submit";
+        button.className = "interaction-button";
+        button.textContent = action;
+        button.disabled = maximum <= 0;
+        form.append(label, button);
+        appendTransferAll(form, input, allText);
 
-      const input =
-        document.createElement("input");
-
-      input.type = "number";
-      input.min = "0";
-
-      input.step =
-        isDiscrete(id)
-          ? "1"
-          : "0.1";
-
-      input.value =
-        isDiscrete(id)
-          ? "1"
-          : "0.1";
-
-      const pickup =
-        document.createElement("button");
-
-      pickup.type = "button";
-      pickup.className =
-        "interaction-button primary";
-      pickup.textContent =
-        "Queue Pickup";
-      pickup.disabled =
-        stored <= 0;
-
-      const drop =
-        document.createElement("button");
-
-      drop.type = "button";
-      drop.className =
-        "interaction-button";
-      drop.textContent =
-        "Queue Drop Off";
-      drop.disabled =
-        carried <= 0;
-
-      const go =
-        async (direction) => {
+        form.addEventListener("submit", async (event) => {
+          event.preventDefault();
+          const amount = Number(input.value);
+          if (!Number.isFinite(amount) || amount <= 0 || amount > maximum) return;
           try {
-            const result =
-              await api(
-                "/api/house/storage/transfer",
-                {
-                  method: "POST",
-                  body:
-                    JSON.stringify({
-                      resource_id: id,
-                      amount:
-                        Number(
-                          input.value
-                        ),
-                      direction,
-                    }),
-                }
-              );
-
+            const result = await api("/api/house/storage/transfer", {
+              method: "POST",
+              body: JSON.stringify({ resource_id: id, amount, direction }),
+            });
             renderState(result.state);
             renderHouseStorageManager();
           } catch (error) {
-            statusLine.textContent =
-              error.message;
+            statusLine.textContent = error.message;
           }
-        };
-
-      pickup.addEventListener(
-        "click",
-        () => go("to_player")
-      );
-
-      drop.addEventListener(
-        "click",
-        () => go("to_house")
-      );
-
-      controls.append(
-        input,
-        pickup,
-        drop
-      );
-
-      card.append(
-        h,
-        p,
-        controls
-      );
+        });
+        card.appendChild(form);
+      }
 
       inspectorContent.appendChild(card);
     }
