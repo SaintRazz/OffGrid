@@ -8,7 +8,8 @@
       "initial_stock": 0.0,
       "category": "utilities",
       "behavior": "flow",
-      "quantity_mode": "continuous"
+      "quantity_mode": "continuous",
+      "mass_per_native_unit_lb": 0.0
     },
     "potable_water": {
       "name": "Potable water",
@@ -16,7 +17,10 @@
       "initial_stock": 0.0,
       "category": "utilities",
       "behavior": "flow",
-      "quantity_mode": "continuous"
+      "quantity_mode": "continuous",
+      "mass_per_native_unit_lb": 8.34,
+      "requires_container": true,
+      "volume_per_native_unit_gal": 1.0
     },
     "non_potable_water": {
       "name": "Non-potable water",
@@ -24,7 +28,10 @@
       "initial_stock": 0.0,
       "category": "utilities",
       "behavior": "stock",
-      "quantity_mode": "continuous"
+      "quantity_mode": "continuous",
+      "mass_per_native_unit_lb": 8.34,
+      "requires_container": true,
+      "volume_per_native_unit_gal": 1.0
     },
     "feed": {
       "name": "Chicken feed",
@@ -32,7 +39,9 @@
       "initial_stock": 0.0,
       "category": "biological_materials",
       "behavior": "stock",
-      "quantity_mode": "continuous"
+      "quantity_mode": "continuous",
+      "mass_per_native_unit_lb": 1.0,
+      "bulk_density_lb_per_gal": 5.0
     },
     "eggs": {
       "name": "Eggs",
@@ -40,7 +49,8 @@
       "initial_stock": 0.0,
       "category": "biological_materials",
       "behavior": "stock",
-      "quantity_mode": "discrete"
+      "quantity_mode": "discrete",
+      "mass_per_native_unit_lb": 0.125
     },
     "scat": {
       "name": "Scat",
@@ -48,7 +58,10 @@
       "initial_stock": 0.0,
       "category": "biological_materials",
       "behavior": "stock",
-      "quantity_mode": "continuous"
+      "quantity_mode": "continuous",
+      "mass_per_native_unit_lb": 1.0,
+      "bulk_density_lb_per_gal": 8.0,
+      "requires_container": true
     },
     "kitchen_waste": {
       "name": "Kitchen waste",
@@ -57,7 +70,9 @@
       "capacity": null,
       "category": "biological_materials",
       "behavior": "stock",
-      "quantity_mode": "continuous"
+      "quantity_mode": "continuous",
+      "mass_per_native_unit_lb": 1.0,
+      "bulk_density_lb_per_gal": 5.0
     },
     "live_grass": {
       "name": "Live grass biomass",
@@ -65,7 +80,8 @@
       "initial_stock": 0.0,
       "category": "biological_materials",
       "behavior": "stock",
-      "quantity_mode": "continuous"
+      "quantity_mode": "continuous",
+      "mass_per_native_unit_lb": 1.0
     },
     "insect_forage": {
       "name": "Insect forage",
@@ -74,7 +90,10 @@
       "category": "biological_materials",
       "behavior": "stock",
       "quantity_mode": "continuous",
-      "notes": "Physical insect forage such as collected BSFL can be stored and moved; naturally occurring yard insect forage is tracked separately in game-state yard_resources."
+      "notes": "Physical insect forage such as collected BSFL can be stored and moved; naturally occurring yard insect forage is tracked separately in game-state yard_resources.",
+      "mass_per_native_unit_lb": 1.0,
+      "requires_container": true,
+      "bulk_density_lb_per_gal": 4.0
     },
     "green_forage": {
       "name": "Green forage",
@@ -83,7 +102,8 @@
       "category": "biological_materials",
       "behavior": "stock",
       "quantity_mode": "continuous",
-      "notes": "Soft edible vegetation, tender shoots, weeds, seed heads, and similar yard forage. Environmental availability is tracked in game-state yard_resources."
+      "notes": "Soft edible vegetation, tender shoots, weeds, seed heads, and similar yard forage. Environmental availability is tracked in game-state yard_resources.",
+      "mass_per_native_unit_lb": 1.0
     },
     "compost": {
       "name": "Compost",
@@ -91,7 +111,10 @@
       "initial_stock": 0.0,
       "category": "biological_materials",
       "behavior": "stock",
-      "quantity_mode": "continuous"
+      "quantity_mode": "continuous",
+      "mass_per_native_unit_lb": 1.0,
+      "bulk_density_lb_per_gal": 6.0,
+      "requires_container": true
     },
     "chicken": {
       "name": "Laying hen",
@@ -99,7 +122,8 @@
       "initial_stock": 0.0,
       "category": "biological_materials",
       "behavior": "stock",
-      "quantity_mode": "discrete"
+      "quantity_mode": "discrete",
+      "mass_per_native_unit_lb": 5.0
     },
     "bsfl_biomass": {
       "name": "BSFL larval biomass",
@@ -107,7 +131,8 @@
       "initial_stock": 0.0,
       "category": "biological_materials",
       "behavior": "stock",
-      "quantity_mode": "continuous"
+      "quantity_mode": "continuous",
+      "mass_per_native_unit_lb": 1.0
     },
     "recalcitrant_waste": {
       "name": "Recalcitrant waste",
@@ -116,7 +141,8 @@
       "capacity": null,
       "category": "biological_materials",
       "behavior": "flow",
-      "quantity_mode": "continuous"
+      "quantity_mode": "continuous",
+      "mass_per_native_unit_lb": 1.0
     },
     "carbonaceous_plant_waste": {
       "name": "Carbonaceous plant waste",
@@ -125,7 +151,9 @@
       "category": "biological_materials",
       "behavior": "stock",
       "quantity_mode": "continuous",
-      "notes": "Dry compostable browns such as household paper/cardboard, dry leaves, and straw."
+      "notes": "Dry compostable browns such as household paper/cardboard, dry leaves, and straw.",
+      "mass_per_native_unit_lb": 1.0,
+      "bulk_density_lb_per_gal": 0.5
     },
     "active_compost": {
       "name": "Active compost / pre-compost",
@@ -134,7 +162,20 @@
       "category": "biological_materials",
       "behavior": "stock",
       "quantity_mode": "continuous",
-      "notes": "Partially decomposed organic material that can be added directly to a compost pile's active-compost pool."
+      "notes": "Partially decomposed organic material that can be added directly to a compost pile's active-compost pool.",
+      "mass_per_native_unit_lb": 1.0,
+      "bulk_density_lb_per_gal": 6.0,
+      "requires_container": true
+    },
+    "bucket": {
+      "name": "Five-gallon bucket",
+      "unit": "bucket",
+      "initial_stock": 0,
+      "category": "equipment",
+      "behavior": "stock",
+      "quantity_mode": "discrete",
+      "mass_per_native_unit_lb": 2.0,
+      "container_capacity_gal": 5.0
     }
   }
 }

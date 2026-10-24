@@ -689,39 +689,9 @@ if (landGrid) {
     instance,
     definition
   ) {
-    const inputs =
-      definition?.inputs ?? {};
-
-    const demand =
-      Number(
-        instance.unbalanced_kitchen_waste ?? 0
-      ) *
-        Number(
-          inputs.kitchen_waste
-            ?.carbon_demand_lb_per_lb ??
-          0.5
-        ) +
-      Number(
-        instance.unbalanced_scat ?? 0
-      ) *
-        Number(
-          inputs.scat
-            ?.carbon_demand_lb_per_lb ??
-          1.5
-        );
-
-    const carbon =
-      Number(
-        instance.available_carbon_material ?? 0
-      );
-
-    return {
-      demand,
-      carbon,
-      needed:
-        Math.max(0, demand - carbon),
-    };
+    return instance.carbon_balance ?? {demand: 0, carbon: 0, needed: 0, description: "Insufficient material"};
   }
+
 
   function compostTotalMass(instance) {
     return [
@@ -987,7 +957,7 @@ if (landGrid) {
                     c.needed,
                     2
                   )} lb browns`
-                : "Good",
+                : c.description,
             ]
           );
         }
@@ -1233,11 +1203,13 @@ if (landGrid) {
     const all = document.createElement("button");
     all.type = "button";
     all.className = "interaction-button";
-    all.textContent = text;
+    all.textContent = /drop|deposit/i.test(text) ? "Deposit All" : "Collect All";
     all.disabled = input.disabled;
     all.addEventListener("click", () => {
       input.value = input.max;
+      form.dataset.transferAll = "true";
       form.requestSubmit();
+      delete form.dataset.transferAll;
     });
     form.appendChild(all);
   }
@@ -1415,6 +1387,7 @@ if (landGrid) {
       selection?.instance;
 
     if (!i) return [];
+    if (i.facility_id === "rain-barrel") return [{resourceId: "non_potable_water", label: "Non-potable water", unit: "gal", sourceField: "current_fill", available: Number(i.current_fill ?? 0)}];
 
     if (
       i.facility_id ===
@@ -1537,7 +1510,7 @@ if (landGrid) {
               c.needed,
               2
             )} lb of carbon-rich material to keep composting well.`
-          : "Carbon balance is currently adequate. Fresh balanced inputs are mixed into generic feedstock when the pile is serviced.";
+          : c.description;
 
       inspectorContent.appendChild(
         carbon
@@ -1551,7 +1524,7 @@ if (landGrid) {
       "contents-message";
 
     intro.textContent =
-      "Transfers reserve carried material immediately and queue a physical delivery. Collection is also queued and completes only after the Homesteader reaches the facility.";
+      "Transfers reserve cargo and queue physical travel. Carrying capacity is 50 lb, including reserved cargo. Water and loose compost, scat, and larvae share carried bucket space; order a five-gallon bucket from Outside Orders and pick it up at House Storage.";
 
     inspectorContent.appendChild(
       intro
@@ -1590,48 +1563,9 @@ if (landGrid) {
             )
           : current;
 
-      const remaining =
-        o.capacity == null
-          ? carried
-          : Math.max(
-              0,
-              o.capacity -
-                used -
-                (
-                  o.sharedCapacity
-                    ? (
-                        simulationState
-                          ?.player
-                          ?.task_queue ??
-                        []
-                      )
-                        .filter(
-                          (t) =>
-                            t.type ===
-                              "facility_fill" &&
-                            t.target_instance_id ===
-                              selection.instance.instance_id
-                        )
-                        .reduce(
-                          (s, t) =>
-                            s +
-                            Number(
-                              t.amount ?? 0
-                            ),
-                          0
-                        )
-                    : queued
-                )
-            );
-
-      const maximum =
-        Math.max(
-          0,
-          Math.min(
-            carried,
-            remaining
-          )
-        );
+      const limits = simulationState?.transfer_limits?.facilities?.[selection.instance.instance_id];
+      const remaining = limits?.room?.[o.resourceId] ?? Infinity;
+      const maximum = limits?.deposit?.[o.resourceId] ?? 0;
 
       const card =
         document.createElement("section");
@@ -1741,11 +1675,11 @@ if (landGrid) {
           event.preventDefault();
 
           const amount =
-            Number(input.value);
+            (form.dataset.transferAll ? "all" : Number(input.value));
 
           if (
-            !Number.isFinite(amount) ||
-            amount <= 0
+            amount !== "all" && (!Number.isFinite(amount) ||
+            amount <= 0)
           ) {
             return;
           }
@@ -1798,11 +1732,7 @@ if (landGrid) {
           o.sourceField
         );
 
-      const available =
-        Math.max(
-          0,
-          o.available - reserved
-        );
+      const available = simulationState?.transfer_limits?.facilities?.[selection.instance.instance_id]?.collect?.[o.resourceId] ?? 0;
 
       const card =
         document.createElement("section");
@@ -1905,11 +1835,11 @@ if (landGrid) {
           event.preventDefault();
 
           const amount =
-            Number(input.value);
+            (form.dataset.transferAll ? "all" : Number(input.value));
 
           if (
-            !Number.isFinite(amount) ||
-            amount <= 0
+            amount !== "all" && (!Number.isFinite(amount) ||
+            amount <= 0)
           ) {
             return;
           }
@@ -2079,7 +2009,7 @@ if (landGrid) {
       b.disabled =
         available <= 0;
 
-      capTransferInput(input, available);
+      capTransferInput(input, simulationState?.transfer_limits?.house_pickup?.[stream.id] ?? 0);
       form.append(label, b);
       appendTransferAll(form, input, "Pick up all");
 
@@ -2098,10 +2028,7 @@ if (landGrid) {
                     JSON.stringify({
                       resource_id:
                         stream.id,
-                      amount:
-                        Number(
-                          input.value
-                        ),
+                      amount: form.dataset.transferAll ? "all" : Number(input.value),
                     }),
                 }
               );
@@ -2277,7 +2204,7 @@ if (landGrid) {
         input.type = "number";
         input.min = "0";
         input.value = String(Math.min(available, isDiscrete(id) ? 1 : 0.1));
-        const maximum = capTransferInput(input, available, isDiscrete(id));
+        const maximum = capTransferInput(input, simulationState?.transfer_limits?.house_storage?.[id]?.[direction] ?? 0, isDiscrete(id));
         label.appendChild(input);
         const button = document.createElement("button");
         button.type = "submit";
@@ -2289,8 +2216,8 @@ if (landGrid) {
 
         form.addEventListener("submit", async (event) => {
           event.preventDefault();
-          const amount = Number(input.value);
-          if (!Number.isFinite(amount) || amount <= 0 || amount > maximum) return;
+          const amount = (form.dataset.transferAll ? "all" : Number(input.value));
+          if (amount !== "all" && (!Number.isFinite(amount) || amount <= 0 || amount > maximum)) return;
           try {
             const result = await api("/api/house/storage/transfer", {
               method: "POST",
@@ -2433,10 +2360,7 @@ if (landGrid) {
                   body:
                     JSON.stringify({
                       resource_id: id,
-                      amount:
-                        Number(
-                          input.value
-                        ),
+                      amount: Number(input.value),
                     }),
                 }
               );
@@ -3327,6 +3251,8 @@ if (landGrid) {
 
   function renderPlayerInventory() {
     playerInventoryList.replaceChildren();
+    const carry = simulationState?.player;
+    if (carry) addListItem(playerInventoryList, "Carrying capacity", `${formatAmount(carry.carried_mass_lb, 2)} / 50 lb (${formatAmount(carry.committed_mass_lb, 2)} lb including reserved cargo)`);
 
     const entries =
       Object.entries(

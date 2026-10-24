@@ -1,0 +1,13 @@
+# Transfer and simulation update
+
+Changed systems: `simulation.py`, `resources.json`, `static/script.js`; regression coverage is in `tests/test_transfer_update.py`.
+
+Resource metadata retains native units and adds `mass_per_native_unit_lb`. Water is 8.34 lb/gal, eggs 0.125 lb/egg, hens 5 lb/bird. Loose bulk uses `bulk_density_lb_per_gal`; liquids use `volume_per_native_unit_gal`. A bucket is a discrete, orderable 2 lb item with 5 gal capacity. Water, compost, active compost, scat, and insect forage require bucket space. Feed and browns retain their existing direct carrying behavior. Eggs and birds consume mass but no bucket space.
+
+The server accepts `amount: "all"` on existing physical-transfer routes. It exposes `transfer_limits`, physical carried mass, committed mass, and compost balance for display. Queued household pickups and outgoing deliveries retain their existing immediate reservation/refund behavior; facility collections reserve local output until completion. Reserved outgoing cargo remains in the carrying envelope until delivered. Consequently, queueing a deposit does not free carrying capacity early, and cancelling it cannot overload the player. Bucket pickup must complete before it can contain material.
+
+Save compatibility: additive resource metadata and response fields require no destructive schema migration. Existing alias, single-task, coordinate, compost-pool, forage, and egg migrations remain. Household task targets are refreshed at runtime, including tasks loaded from old saves, so they approach adjacent tiles. Existing inventory is preserved, including legacy overweight inventory; new pickups stay blocked until enough mass has been deposited. Existing saves are not rewritten by implementation or tests.
+
+Compatibility audit: `current_task` is still consumed by the frontend; x/y, type/facility_id and public response aliases remain. Rotation parameters remain in placement/instance normalization; the current API supplies false. `/api/subtick` and `/api/player/inventory/transfer` have no current frontend callers, but external callers cannot be ruled out, so both routes and their wrappers remain. Old resource aliases still participate in save loading and are retained. Migration work remains in normalization; transfer rules live separately in runtime helpers.
+
+Validation: 30 targeted regressions pass; Python syntax, all six root JSON files, and JavaScript syntax pass. JavaScript was parsed with the VS Code bundled Node runtime because standalone Node is absent. The old `tests/test_app.py` cannot collect: it imports `calculate_system_preview`, absent from the current app, and its fixtures target a superseded no-argument Simulation API. This pre-existing suite was preserved for a separate migration.

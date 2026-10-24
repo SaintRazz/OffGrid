@@ -13,6 +13,7 @@ YARD_FORAGE_CAP_DAYS = 3.0
 EGG_GROCERY_VALUE_USD = 0.20
 
 ORDER_CATALOG = {
+    "bucket": {"resource_id": "bucket", "name": "Five-gallon bucket", "unit": "bucket", "integer_only": True},
     "feed": {
         "resource_id": "feed",
         "name": "Chicken feed",
@@ -85,8 +86,7 @@ class Simulation:
             for definition in definitions
         }
 
-        # resources.json is optional to the core engine for now.  If present,
-        # its metadata can be returned to the UI and used for validation later.
+        # Physical transfers use the resource metadata as their authority.
         if self.resources_file.exists():
             with self.resources_file.open(encoding="utf-8") as file:
                 self.resource_config = json.load(file)
@@ -377,6 +377,9 @@ class Simulation:
         queue = player.get("task_queue", [])
         player["current_task"] = deepcopy(queue[0]) if queue else None
         player["queued_task_count"] = max(0, len(queue) - 1)
+        player["carry_capacity_lb"] = 50.0
+        player["carried_mass_lb"] = self.carry_mass()
+        player["committed_mass_lb"] = self.carry_mass(True)
         return player
 
     def state(self):
@@ -387,6 +390,9 @@ class Simulation:
         1. the new GameState-oriented schema, and
         2. compatibility fields expected by the original JavaScript UI.
         """
+        for instance in self.game_state["facilities"]:
+            if instance.get("facility_id") == "compost-pile":
+                instance["carbon_balance"] = self.compost_balance(instance)
         day = int(self.game_state["time"].get("day", 1))
         hour = int(self.game_state["time"].get("hour", 0))
         minute = int(self.game_state["time"].get("minute", 0))
@@ -532,6 +538,7 @@ class Simulation:
             ),
             "resource_definitions": deepcopy(self.resource_definitions),
             "order_catalog": deepcopy(ORDER_CATALOG),
+            "transfer_limits": self._transfer_limits_state(),
             "instances": deepcopy(self.game_state["facilities"]),
         }
 
@@ -672,6 +679,125 @@ class Simulation:
     # Activity queue, physical transfers, and player movement
     # ------------------------------------------------------------------
 
+    COLLECTION_SOURCES = {
+        "chicken-coop": {("eggs", None)},
+        "rain-barrel": {("non_potable_water", "current_fill")},
+        "compost-pile": {("compost", "mature_compost_mass")},
+        "bsfl-reactor": {("insect_forage", None), ("active_compost", "residue_mass")},
+    }
+
+    def _collection_available(self, instance, resource_id, source_field):
+        reserved = sum(float(t.get("amount", 0)) for t in self.game_state["player"].get("task_queue", [])
+                       if t.get("type") == "facility_collect" and t.get("target_instance_id") == instance["instance_id"]
+                       and t.get("resource_id") == resource_id and t.get("source_field") == source_field)
+        return max(0.0, self._facility_output_amount(instance, resource_id, source_field) - reserved)
+
+    def _delivery_room(self, instance, spec):
+        if spec["capacity"] is None:
+            return None
+        shared = spec.get("capacity_mode") == "shared_total_mass"
+        reserved = sum(float(t.get("amount", 0)) for t in self.game_state["player"].get("task_queue", [])
+                       if t.get("type") == "facility_fill" and t.get("target_instance_id") == instance["instance_id"]
+                       and (shared or t.get("target_field") == spec["field"]))
+        current = self._compost_total_mass(instance) if shared else float(instance.get(spec["field"], 0))
+        return max(0.0, spec["capacity"] - current - reserved)
+
+    def _transfer_limits_state(self):
+        result = {"house_pickup": {}, "house_storage": {}, "facilities": {}}
+        for rid, amount in self.game_state["house"]["outputs"].items():
+            result["house_pickup"][rid] = self.transfer_limit(rid, amount, pickup=True)
+        for rid in self.resource_definitions:
+            result["house_storage"][rid] = {
+                "to_player": self.transfer_limit(rid, self._house_storage_amount(rid), pickup=True),
+                "to_house": self.transfer_limit(rid, self._player_inventory_amount(rid))}
+        for instance in self.game_state["facilities"]:
+            entry = {"collect": {}, "deposit": {}, "room": {}}
+            for rid, field in self.COLLECTION_SOURCES.get(instance.get("facility_id"), set()):
+                entry["collect"][rid] = self.transfer_limit(rid, self._collection_available(instance, rid, field), pickup=True)
+            for rid in self.resource_definitions:
+                try:
+                    spec = self._fill_spec(instance, rid)
+                except ValueError:
+                    continue
+                room = self._delivery_room(instance, spec)
+                entry["room"][rid] = room
+                entry["deposit"][rid] = self.transfer_limit(rid, self._player_inventory_amount(rid), destination_room=room)
+            result["facilities"][instance["instance_id"]] = entry
+        return result
+
+    def resource_mass(self, resource_id, amount):
+        definition = self.resource_definitions.get(resource_id)
+        if definition is None or "mass_per_native_unit_lb" not in definition:
+            raise ValueError("Resource has no physical mass definition.")
+        return max(0.0, float(amount)) * float(definition["mass_per_native_unit_lb"])
+
+    def resource_volume(self, resource_id, amount):
+        definition = self.resource_definitions.get(resource_id) or {}
+        if "volume_per_native_unit_gal" in definition:
+            return max(0.0, float(amount)) * float(definition["volume_per_native_unit_gal"])
+        density = definition.get("bulk_density_lb_per_gal")
+        return self.resource_mass(resource_id, amount) / float(density) if density else 0.0
+
+    def _committed_inventory(self):
+        # Reserved deliveries still physically travel with the Homesteader.
+        # Keep them in the conservative capacity envelope until completion;
+        # this also makes cancellation safe regardless of queue order.
+        inventory = dict(self.game_state["player"].get("inventory", {}))
+        for task in self.game_state["player"].get("task_queue", []):
+            cargo = task.get("reserved_cargo") or {}
+            if cargo or task.get("type") == "facility_collect":
+                rid = task.get("resource_id")
+                inventory[rid] = inventory.get(rid, 0.0) + float(task.get("amount", 0.0))
+        return inventory
+
+    def carry_mass(self, committed=False):
+        inventory = self._committed_inventory() if committed else dict(self.game_state["player"].get("inventory", {}))
+        if not committed:
+            for task in self.game_state["player"].get("task_queue", []):
+                if (task.get("reserved_cargo") or {}).get("source") == "player":
+                    rid = task["resource_id"]
+                    inventory[rid] = inventory.get(rid, 0) + float(task["amount"])
+        return sum(self.resource_mass(r, a) for r, a in inventory.items() if a > 0)
+
+    def transfer_limit(self, resource_id, available, pickup=False, destination_room=None):
+        definition = self.resource_definitions.get(resource_id) or {}
+        limit = max(0.0, float(available))
+        if destination_room is not None:
+            limit = min(limit, max(0.0, destination_room))
+        if pickup:
+            mass = self.resource_mass(resource_id, 1)
+            if mass > 0:
+                limit = min(limit, max(0.0, 50.0 - self.carry_mass(True)) / mass)
+            if definition.get("requires_container"):
+                committed = self._committed_inventory()
+                # Only buckets already physically carried are available containers.
+                # All container-required bulk and liquids share their volume.
+                buckets = self._player_inventory_amount("bucket")
+                used = sum(self.resource_volume(r, a) for r, a in committed.items() if self.resource_definitions.get(r, {}).get("requires_container"))
+                limit = min(limit, max(0.0, buckets * 5.0 - used) / self.resource_volume(resource_id, 1))
+        if resource_id == "bucket" and not pickup:
+            contents = sum(self.resource_volume(r, a) for r, a in self._committed_inventory().items()
+                           if self.resource_definitions.get(r, {}).get("requires_container"))
+            loaded_buckets = math.ceil(max(0.0, contents - 1e-9) / 5.0)
+            limit = min(limit, max(0.0, self._player_inventory_amount("bucket") - loaded_buckets))
+        if definition.get("quantity_mode") == "discrete":
+            limit = math.floor(limit + 1e-9)
+        return max(0.0, limit)
+
+    def _transfer_amount(self, resource_id, amount, available, pickup=False, destination_room=None):
+        limit = self.transfer_limit(resource_id, available, pickup, destination_room)
+        if amount == "all":
+            amount = limit
+        try:
+            amount = float(amount)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Transfer amount must be numeric or all.") from exc
+        if not math.isfinite(amount) or amount <= 0 or amount > limit + 1e-9:
+            raise ValueError(f"Maximum legal transfer is {limit:g}; check stock, carrying capacity and containers.")
+        if self.resource_definitions.get(resource_id, {}).get("quantity_mode") == "discrete" and not amount.is_integer():
+            raise ValueError("This resource requires whole units.")
+        return amount
+
     def _find_facility_instance(self, instance_id):
         for instance in self.game_state["facilities"]:
             if instance.get("instance_id") == instance_id:
@@ -741,6 +867,20 @@ class Simulation:
         )
         available = max(0.0, float(instance.get("available_carbon_material", 0.0)))
         return max(0.0, demand - available), demand, available
+
+    def compost_balance(self, instance):
+        deficit, demand, carbon = self._compost_carbon_demand(instance)
+        if demand <= 1e-9 and carbon <= 1e-9:
+            state, description = "empty", "Insufficient fresh material"
+        elif demand <= 1e-9 or carbon > demand * 1.2:
+            state, description = "carbon-rich", "Carbon-rich / nitrogen-poor: add nitrogen-rich material"
+        elif carbon < demand * 0.8:
+            state, description = "carbon-poor", "Carbon-poor / nitrogen-rich: add browns"
+        else:
+            state, description = "balanced", "Carbon balance is within target range"
+        return {"state": state, "description": description, "demand": demand, "carbon": carbon,
+                "needed": deficit if state == "carbon-poor" else 0.0,
+                "excess": max(0.0, carbon - demand) if state == "carbon-rich" else 0.0}
 
     def _compost_description(self, instance):
         feedstock = max(0.0, float(instance.get("feedstock_mass", 0.0)))
@@ -921,10 +1061,13 @@ class Simulation:
 
     def _nearest_adjacent_tile(self, instance):
         self._normalize_instance(instance)
+        custom = instance.get("interaction_point")
+        if custom and not self._point_blocked(custom["column"], custom["row"]):
+            return deepcopy(custom)
         c0 = int(instance["column"])
         r0 = int(instance["row"])
-        w = int(instance["width"])
-        h = int(instance["height"])
+        w = int(instance.get("width", 1))
+        h = int(instance.get("height", 1))
         candidates = []
         for column in range(c0, c0 + w):
             candidates.extend([(column, r0 - 1), (column, r0 + h)])
@@ -973,26 +1116,21 @@ class Simulation:
     def queue_house_pickup(self, resource_id, amount):
         if resource_id not in {"kitchen_waste", "carbonaceous_plant_waste"}:
             raise ValueError("That resource is not available from a house pickup point.")
-        try:
-            amount = float(amount)
-        except (TypeError, ValueError) as exc:
-            raise ValueError("Pickup amount must be numeric.") from exc
-        if amount <= 0:
-            raise ValueError("Pickup amount must be greater than zero.")
-
         outputs = self.game_state["house"].setdefault("outputs", {})
         available = float(outputs.get(resource_id, 0.0))
+        amount = self._transfer_amount(resource_id, amount, available, pickup=True)
         if amount > available + 1e-9:
             raise ValueError(f"Only {available:g} is available at that pickup point.")
-        outputs[resource_id] = max(0.0, available - amount)
         point = self.game_state["house"]["pickup_points"][resource_id]
+        target = self._nearest_adjacent_tile(dict(point))
+        outputs[resource_id] = max(0.0, available - amount)
         return self._queue_task({
             "type": "house_pickup",
             "description": f"Pick up {amount:g} {resource_id.replace('_', ' ')}",
             "resource_id": resource_id,
             "amount": amount,
             "reserved_cargo": {"resource_id": resource_id, "amount": amount, "source": "house_output"},
-            "target": {"column": float(point["column"]), "row": float(point["row"])},
+            "target": target,
             "work_minutes_total": 1,
             "work_minutes_remaining": 1,
         })
@@ -1003,17 +1141,11 @@ class Simulation:
     def queue_house_storage_transfer(self, resource_id, amount, direction):
         if not isinstance(resource_id, str) or not resource_id:
             raise ValueError("A resource must be selected.")
-        try:
-            amount = float(amount)
-        except (TypeError, ValueError) as exc:
-            raise ValueError("Transfer amount must be numeric.") from exc
-        if amount <= 0:
-            raise ValueError("Transfer amount must be greater than zero.")
-        if resource_id == "chicken" and not amount.is_integer():
-            raise ValueError("Laying hens must be transferred in whole birds.")
-
+        point = self.game_state["house"]["storage_point"]
+        target = self._nearest_adjacent_tile(dict(point))
         if direction == "to_player":
             available = self._house_storage_amount(resource_id)
+            amount = self._transfer_amount(resource_id, amount, available, pickup=direction == "to_player")
             if amount > available + 1e-9:
                 raise ValueError(f"Only {available:g} is available in House Storage.")
             self._consume_house_storage(resource_id, amount)
@@ -1021,6 +1153,7 @@ class Simulation:
             description = f"Pick up {amount:g} {resource_id.replace('_', ' ')} from House Storage"
         elif direction == "to_house":
             available = self._player_inventory_amount(resource_id)
+            amount = self._transfer_amount(resource_id, amount, available, pickup=direction == "to_player")
             if amount > available + 1e-9:
                 raise ValueError(f"The Homesteader is carrying only {available:g}.")
             self._consume_player_inventory(resource_id, amount)
@@ -1037,7 +1170,7 @@ class Simulation:
             "amount": amount,
             "transfer_direction": direction,
             "reserved_cargo": {"resource_id": resource_id, "amount": amount, "source": source},
-            "target": {"column": float(point["column"]), "row": float(point["row"])},
+            "target": target,
             "work_minutes_total": 1,
             "work_minutes_remaining": 1,
         })
@@ -1055,38 +1188,12 @@ class Simulation:
             raise ValueError("A facility instance must be selected.")
         if not isinstance(resource_id, str) or not resource_id:
             raise ValueError("A material must be selected.")
-        try:
-            amount = float(amount)
-        except (TypeError, ValueError) as exc:
-            raise ValueError("Fill amount must be numeric.") from exc
-        if amount <= 0:
-            raise ValueError("Fill amount must be greater than zero.")
-
         instance = self._find_facility_instance(instance_id)
         spec = self._fill_spec(instance, resource_id)
-        if spec["integer_only"] and not amount.is_integer():
-            raise ValueError("Laying hens must be added in whole birds.")
-
         available = self._player_inventory_amount(resource_id)
-        if amount > available + 1e-9:
-            raise ValueError(f"The Homesteader is carrying only {available:g}.")
+        remaining = self._delivery_room(instance, spec)
 
-        reserved = 0.0
-        for task in self.game_state["player"].get("task_queue", []):
-            if task.get("type") == "facility_fill" and task.get("target_instance_id") == instance_id:
-                if spec.get("capacity_mode") == "shared_total_mass" or task.get("target_field") == spec["field"]:
-                    reserved += float(task.get("amount", 0.0))
-
-        if spec["capacity"] is not None:
-            current = (
-                self._compost_total_mass(instance)
-                if spec.get("capacity_mode") == "shared_total_mass"
-                else max(0.0, float(instance.get(spec["field"], 0.0)))
-            )
-            remaining = max(0.0, float(spec["capacity"]) - current - reserved)
-            if amount > remaining + 1e-9:
-                raise ValueError(f"That exceeds remaining capacity ({remaining:g} {spec['unit']}).")
-
+        amount = self._transfer_amount(resource_id, amount, available, destination_room=remaining)
         self._consume_player_inventory(resource_id, amount)
         definition = self.facility_definitions.get(instance["facility_id"]) or {}
         return self._queue_task({
@@ -1109,36 +1216,14 @@ class Simulation:
         instance = self._find_facility_instance(instance_id)
         if not isinstance(resource_id, str) or not resource_id:
             raise ValueError("A resource must be selected.")
-        try:
-            amount = float(amount)
-        except (TypeError, ValueError) as exc:
-            raise ValueError("Collection amount must be numeric.") from exc
-        if amount <= 0:
-            raise ValueError("Collection amount must be greater than zero.")
-
-        allowed_sources = {
-            "chicken-coop": {("eggs", None)},
-            "compost-pile": {("compost", "mature_compost_mass")},
-            "bsfl-reactor": {("insect_forage", None), ("active_compost", "residue_mass")},
-        }
+        allowed_sources = self.COLLECTION_SOURCES
         facility_id = instance.get("facility_id")
         if (resource_id, source_field) not in allowed_sources.get(facility_id, set()):
             raise ValueError("That output is not available for collection from this facility.")
 
         resource_def = self.resource_definitions.get(resource_id) or {}
-        if resource_def.get("quantity_mode") == "discrete" and not amount.is_integer():
-            raise ValueError(f"{resource_def.get('name', resource_id)} must be collected in whole units.")
-
-        available = self._facility_output_amount(instance, resource_id, source_field)
-        reserved = sum(
-            max(0.0, float(task.get("amount", 0.0)))
-            for task in self.game_state["player"].get("task_queue", [])
-            if task.get("type") == "facility_collect"
-            and task.get("target_instance_id") == instance_id
-            and task.get("resource_id") == resource_id
-            and task.get("source_field") == source_field
-        )
-        free = max(0.0, available - reserved)
+        free = self._collection_available(instance, resource_id, source_field)
+        amount = self._transfer_amount(resource_id, amount, free, pickup=True)
         if amount > free + 1e-9:
             raise ValueError(f"Only {free:g} is available to collect.")
 
@@ -1209,6 +1294,14 @@ class Simulation:
         raise ValueError("Task not found.")
 
     def _initialize_task(self, task):
+        # Refresh household targets for old saves as well as newly queued tasks.
+        if task.get("type") in {"house_pickup", "house_storage_transfer"}:
+            point = (self.game_state["house"]["pickup_points"][task["resource_id"]]
+                     if task["type"] == "house_pickup" else self.game_state["house"]["storage_point"])
+            target = self._nearest_adjacent_tile(dict(point))
+            if task.get("target") != target and task.get("phase") in {"travel", "working"}:
+                task["phase"] = "queued"
+            task["target"] = target
         if task.get("phase") != "queued":
             return
         if task.get("target_instance_id"):
@@ -1824,6 +1917,8 @@ class Simulation:
             per_unit_daily = rule.get("rate_per_container_unit_per_day")
             if per_unit_daily is None:
                 continue
+            if resource_id == "scat":
+                continue
             expected_amount = float(per_unit_daily) * bird_count / HOURS_PER_DAY * utilization
             if resource_id == "eggs":
                 total_with_remainder = max(0.0, float(remainders.get("eggs", 0.0))) + expected_amount
@@ -1958,7 +2053,8 @@ class Simulation:
             "unbalanced_scat": round(float(instance.get("unbalanced_scat", 0.0)), 6),
             "available_carbon_material": round(available_carbon, 6),
             "carbon_demand_total_lb": round(total_carbon_demand, 6),
-            "additional_carbon_needed_lb": round(carbon_needed, 6),
+            "additional_carbon_needed_lb": round(self.compost_balance(instance)["needed"], 6),
+            "carbon_balance": self.compost_balance(instance),
             "processed_feedstock_lb": round(feedstock_processed, 6),
             "active_compost_created_lb": round(active_created, 6),
             "rapid_decomposition_loss_lb": round(decomposition_loss, 6),
@@ -2247,6 +2343,12 @@ class Simulation:
                 / HOURS_PER_DAY
             )
 
+        flock = sum(max(0.0, float(i.get("current_fill", 0))) for i in self.game_state["facilities"] if i.get("facility_id") == "chicken-coop")
+        scat_production = flock * 0.125 / HOURS_PER_DAY
+        excess_scat = max(0.0, scat_production - scat_capacity)
+        self._add_inventory("scat", excess_scat)
+        produced["scat"] = round(excess_scat, 6)
+
         return {
             "instance_id": "__default_tiles__",
             "facility_id": default_tile_id,
@@ -2255,6 +2357,6 @@ class Simulation:
             "produced": produced,
             "yard_forage": forage_capacity,
             "potential_scat_assimilation_lb": round(scat_capacity, 6),
-            "note": "Yard forage is an environmental pool capped at three days of current grass-tile generation; scat assimilation remains reported but not auto-routed.",
+            "note": "Yard forage is an environmental pool capped at three days of current grass-tile generation; scat is spread property-wide and only excess beyond lawn assimilation enters inventory.",
         }
 
