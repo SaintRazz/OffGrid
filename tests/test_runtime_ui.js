@@ -16,7 +16,7 @@ const context = vm.createContext({
     return {state: {}};
   },
   renderState() {}, nextDayButton: {}, statusLine: {},
-  inspectorOverlay: {hidden: true},
+  inspectorOverlay: {hidden: true}, startupOverlay: {hidden: true},
 });
 vm.runInContext(`
   let runtimeTimer = null;

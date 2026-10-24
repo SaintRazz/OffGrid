@@ -1,5 +1,9 @@
 import json
 import shutil
+import os
+import tempfile
+from uuid import uuid4
+from datetime import datetime, timezone
 from pathlib import Path
 from threading import Lock
 
@@ -20,6 +24,7 @@ SAVES_DIR = BASE_DIR / "saves"
 
 CURRENT_GAME_FILE = None
 CURRENT_GAME_NAME = None
+CURRENT_SAVE_ID = None
 SIMULATION_LOCK = Lock()
 app.extensions["simulation"] = None
 
@@ -58,7 +63,15 @@ def find_saved_games():
     if SAVES_DIR.exists():
         candidates.extend(sorted(SAVES_DIR.glob("*.json")))
 
-    return candidates
+    valid = []
+    for path in candidates:
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(data, dict) and all(key in data for key in ("time", "map", "facilities")):
+                valid.append(path)
+        except (OSError, ValueError):
+            continue
+    return valid
 
 
 def save_record(path):
@@ -71,7 +84,8 @@ def save_record(path):
     return {
         "id": relative_text,
         "filename": path.name,
-        "label": path.stem,
+        "label": json.loads(path.read_text(encoding="utf-8")).get("save_name", path.stem),
+        "saved_at": datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).isoformat(),
         "path": relative_text,
     }
 
@@ -108,6 +122,7 @@ def session_status():
         "game_loaded": app.extensions.get("simulation") is not None,
         "file": CURRENT_GAME_FILE.name if CURRENT_GAME_FILE else None,
         "game_name": CURRENT_GAME_NAME,
+        "save_id": CURRENT_SAVE_ID,
     })
 
 
@@ -118,6 +133,7 @@ def saved_games():
 
 @app.post("/api/new-game")
 def new_game():
+    global CURRENT_SAVE_ID
     if not NEW_GAME_FILE.exists():
         return jsonify({
             "error": f"New-game template not found: {NEW_GAME_FILE.name}"
@@ -127,11 +143,13 @@ def new_game():
         with SIMULATION_LOCK:
             shutil.copyfile(NEW_GAME_FILE, ACTIVE_GAME_FILE)
             simulation = activate_game(ACTIVE_GAME_FILE, "New Game")
+            CURRENT_SAVE_ID = None
             state = simulation.state()
     except (OSError, json.JSONDecodeError, TypeError, ValueError, KeyError) as exc:
         return jsonify({"error": str(exc)}), 500
 
     return jsonify({
+        "save_id": None,
         "status": "new_game",
         "file": ACTIVE_GAME_FILE.name,
         "game_name": CURRENT_GAME_NAME,
@@ -141,6 +159,7 @@ def new_game():
 
 @app.post("/api/load-game")
 def load_game():
+    global CURRENT_GAME_FILE, CURRENT_GAME_NAME, CURRENT_SAVE_ID
     payload = request.get_json(silent=True) or {}
     save_id = payload.get("save_id")
 
@@ -150,17 +169,79 @@ def load_game():
     try:
         selected = resolve_save_id(save_id)
         with SIMULATION_LOCK:
-            simulation = activate_game(selected, selected.stem)
+            # Work on ActiveGame; named snapshots change only on explicit Save.
+            simulation = create_simulation(selected)
+            name = simulation.game_state.get("save_name", selected.stem)
+            write_snapshot(ACTIVE_GAME_FILE, simulation.game_state)
+            simulation.game_state_file = ACTIVE_GAME_FILE
+            app.extensions["simulation"] = simulation
+            CURRENT_GAME_FILE = ACTIVE_GAME_FILE
+            CURRENT_GAME_NAME = name
+            CURRENT_SAVE_ID = save_id
             state = simulation.state()
     except (OSError, json.JSONDecodeError, TypeError, ValueError, KeyError) as exc:
         return jsonify({"error": str(exc)}), 400
 
     return jsonify({
+        "save_id": CURRENT_SAVE_ID,
         "status": "loaded",
         "file": selected.name,
         "game_name": CURRENT_GAME_NAME,
         "state": state,
     })
+
+
+def write_snapshot(path, state):
+    """Replace a snapshot atomically so interrupted writes preserve the old save."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent,
+                                         suffix=".tmp", delete=False) as output:
+            temporary = Path(output.name)
+            json.dump(state, output, indent=2, allow_nan=False)
+            output.flush()
+            os.fsync(output.fileno())
+        os.replace(temporary, path)
+    finally:
+        if temporary is not None and temporary.exists():
+            temporary.unlink()
+
+
+@app.post("/api/save-game")
+def save_game():
+    global CURRENT_SAVE_ID, CURRENT_GAME_NAME
+    payload = request.get_json(silent=True) or {}
+    if not isinstance(payload, dict):
+        return jsonify({"error": "Save request must be an object."}), 400
+    name = payload.get("name")
+    if "name" in payload and (not isinstance(name, str) or not name.strip() or
+                              len(name.strip()) > 80 or any(ord(c) < 32 for c in name)):
+        return jsonify({"error": "Enter a save name of 1 to 80 characters without control characters."}), 400
+    try:
+        with SIMULATION_LOCK:
+            simulation = get_simulation()
+            if name is not None:
+                name = name.strip()
+                destination = SAVES_DIR / (uuid4().hex + ".json")
+            elif CURRENT_SAVE_ID:
+                destination = resolve_save_id(CURRENT_SAVE_ID)
+                # Preserve legacy source snapshots in the repository.
+                if destination.parent != SAVES_DIR:
+                    destination = SAVES_DIR / (uuid4().hex + ".json")
+                name = CURRENT_GAME_NAME
+            else:
+                return jsonify({"error": "Name your first save.", "name_required": True}), 400
+            snapshot = {**simulation.game_state, "save_name": name}
+            write_snapshot(destination, snapshot)
+            CURRENT_SAVE_ID = save_record(destination)["id"]
+            CURRENT_GAME_NAME = name
+    except RuntimeError as exc:
+        return jsonify({"error": str(exc)}), 409
+    except (OSError, ValueError, TypeError) as exc:
+        return jsonify({"error": str(exc)}), 400
+    return jsonify({"status": "saved", "game_name": name, "save_id": CURRENT_SAVE_ID,
+                    "save": save_record(destination)})
 
 
 @app.get("/api/simulation")

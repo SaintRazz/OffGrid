@@ -1436,3 +1436,17 @@ body {
 .placed-building > .building-sprite {
   display: block;
 }
+
+.save-actions { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-top: 0.35rem; }
+#save-status { font-size: 0.75rem; max-width: 24rem; overflow-wrap: anywhere; }
+#save-dialog {
+  width: min(26rem, calc(100vw - 2rem));
+  border: 1px solid var(--muted);
+  border-radius: 12px;
+  padding: 1.5rem;
+  background: var(--panel, #faf8ef);
+  color: var(--ink, #252d25);
+}
+#save-dialog::backdrop { background: rgba(20, 24, 22, 0.48); }
+#save-name-input { display: block; width: 100%; margin-top: 0.5rem; padding: 0.6rem; box-sizing: border-box; }
+#save-dialog-status { min-height: 1.2em; }

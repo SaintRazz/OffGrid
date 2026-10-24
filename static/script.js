@@ -18,6 +18,16 @@ if (landGrid) {
   const runtimeStatus = document.querySelector(".runtime-status");
   const runtimeLabel = document.getElementById("runtime-label");
   const gameSpeedSelect = document.getElementById("game-speed-select");
+  const saveGameButton = document.getElementById("save-game-button");
+  const saveAsButton = document.getElementById("save-as-button");
+  const saveDialog = document.getElementById("save-dialog");
+  const saveGameForm = document.getElementById("save-game-form");
+  const saveNameInput = document.getElementById("save-name-input");
+  const saveDialogStatus = document.getElementById("save-dialog-status");
+  const saveStatus = document.getElementById("save-status");
+  const confirmSaveButton = document.getElementById("confirm-save-button");
+  let currentSaveId = null;
+  let saveInFlight = false;
   const nextDayButton = document.getElementById("next-day-button");
   const orderButton = document.getElementById("order-button");
 
@@ -27,6 +37,10 @@ if (landGrid) {
   const loadGameButton = document.getElementById("load-game-button");
   const loadGamePanel = document.getElementById("load-game-panel");
   const saveGameList = document.getElementById("save-game-list");
+  const openNewGameButton = document.getElementById("open-new-game-button");
+  const openLoadGameButton = document.getElementById("open-load-game-button");
+  const returnToGameButton = document.getElementById("return-to-game-button");
+  let gameSwitchInFlight = false;
   const backToStartButton = document.getElementById("back-to-start-button");
   const startupStatus = document.getElementById("startup-status");
 
@@ -145,6 +159,10 @@ if (landGrid) {
   }
 
   function startRuntime() {
+    if (!startupOverlay.hidden) {
+      stopRuntime("Choose a game");
+      return;
+    }
     if (isManagingContents()) {
       stopRuntime("Paused for management");
       return;
@@ -169,7 +187,7 @@ if (landGrid) {
   }
 
   async function advanceSimulation(minutes, message = null) {
-    if (!gameLoaded || advanceInFlight || isManagingContents()) return null;
+    if (!gameLoaded || !startupOverlay.hidden || advanceInFlight || isManagingContents()) return null;
     advanceInFlight = true;
     if (nextDayButton) nextDayButton.disabled = true;
     try {
@@ -4176,6 +4194,10 @@ if (landGrid) {
     "keydown",
     (event) => {
       if (event.key === "Escape") {
+        if (!startupOverlay.hidden && gameLoaded) {
+          returnToGame();
+          return;
+        }
         closeInspector();
         clearMapSelection();
         cancelPlacement();
@@ -4220,7 +4242,14 @@ if (landGrid) {
     }
   );
 
-  function setGameLoaded(name, state) {
+  function setGameLoaded(name, state, saveId = null) {
+    currentSaveId = saveId;
+    openNewGameButton.disabled = false;
+    openLoadGameButton.disabled = false;
+    returnToGameButton.hidden = true;
+    saveGameButton.disabled = false;
+    saveAsButton.disabled = false;
+    saveStatus.textContent = "";
     gameLoaded = true;
 
     currentGameName.textContent =
@@ -4238,6 +4267,9 @@ if (landGrid) {
   }
 
   async function beginNewGame() {
+    if (gameSwitchInFlight) return;
+    gameSwitchInFlight = true;
+    returnToGameButton.disabled = true;
     startupStatus.textContent =
       "Creating new game…";
 
@@ -4245,6 +4277,7 @@ if (landGrid) {
     loadGameButton.disabled = true;
 
     try {
+      await waitForAdvance();
       const r =
         await api(
           "/api/new-game",
@@ -4256,12 +4289,15 @@ if (landGrid) {
 
       setGameLoaded(
         r.game_name,
-        r.state
+        r.state,
+        r.save_id
       );
     } catch (error) {
       startupStatus.textContent =
         error.message;
     } finally {
+      gameSwitchInFlight = false;
+      returnToGameButton.disabled = false;
       newGameButton.disabled = false;
       loadGameButton.disabled = false;
     }
@@ -4309,8 +4345,9 @@ if (landGrid) {
           strong.textContent =
             save.label;
 
-          small.textContent =
-            save.path;
+          small.textContent = save.saved_at
+            ? `Saved ${new Date(save.saved_at).toLocaleString()}`
+            : save.filename;
 
           b.append(strong, small);
 
@@ -4332,10 +4369,14 @@ if (landGrid) {
   }
 
   async function loadSavedGame(id) {
+    if (gameSwitchInFlight) return;
+    gameSwitchInFlight = true;
+    returnToGameButton.disabled = true;
     startupStatus.textContent =
       "Loading game…";
 
     try {
+      await waitForAdvance();
       const r =
         await api(
           "/api/load-game",
@@ -4350,13 +4391,48 @@ if (landGrid) {
 
       setGameLoaded(
         r.game_name,
-        r.state
+        r.state,
+        r.save_id
       );
     } catch (error) {
       startupStatus.textContent =
         error.message;
+    } finally {
+      gameSwitchInFlight = false;
+      returnToGameButton.disabled = false;
     }
   }
+
+  async function waitForAdvance() {
+    // Finish an old tick before replacing the active world.
+    while (advanceInFlight) await new Promise(resolve => window.setTimeout(resolve, 25));
+  }
+
+  function openGameChooser(load = false) {
+    if (!gameLoaded || gameSwitchInFlight || saveInFlight) return;
+    startupOverlay.hidden = false;
+    startupMainActions.hidden = false;
+    loadGamePanel.hidden = true;
+    startupStatus.textContent = "Save your progress before switching games. Named saves are preserved.";
+    returnToGameButton.hidden = false;
+    closeInspector();
+    clearMapSelection();
+    cancelPlacement({silent: true});
+    stopRuntime("Choose a game");
+    if (load) showSavedGames();
+    else newGameButton.focus();
+  }
+
+  function returnToGame() {
+    if (!gameLoaded || gameSwitchInFlight) return;
+    startupOverlay.hidden = true;
+    returnToGameButton.hidden = true;
+    startRuntime();
+  }
+
+  openNewGameButton.addEventListener("click", () => openGameChooser());
+  openLoadGameButton.addEventListener("click", () => openGameChooser(true));
+  returnToGameButton.addEventListener("click", returnToGame);
 
   newGameButton.addEventListener(
     "click",
@@ -4377,29 +4453,60 @@ if (landGrid) {
     }
   );
 
+  function openSaveDialog() {
+    if (!gameLoaded || saveInFlight) return;
+    saveNameInput.value = currentSaveId ? `${currentGameName.textContent} copy` : "My Homestead";
+    saveDialogStatus.textContent = "";
+    saveDialog.showModal();
+    saveNameInput.focus();
+    saveNameInput.select();
+  }
+
+  async function saveCurrentGame(name = null) {
+    if (!gameLoaded || saveInFlight) return;
+    if (name === null && !currentSaveId) {
+      openSaveDialog();
+      return;
+    }
+    saveInFlight = true;
+    saveGameButton.disabled = true;
+    saveAsButton.disabled = true;
+    confirmSaveButton.disabled = true;
+    saveStatus.textContent = "Saving...";
+    try {
+      const result = await api("/api/save-game", {
+        method: "POST",
+        body: JSON.stringify(name === null ? {} : {name}),
+      });
+      currentSaveId = result.save_id;
+      currentGameName.textContent = result.game_name;
+      saveStatus.textContent = `Saved ${result.game_name}`;
+      if (saveDialog.open) saveDialog.close();
+    } catch (error) {
+      saveStatus.textContent = `Save failed: ${error.message}`;
+      if (saveDialog.open) saveDialogStatus.textContent = error.message;
+    } finally {
+      saveInFlight = false;
+      saveGameButton.disabled = false;
+      saveAsButton.disabled = false;
+      confirmSaveButton.disabled = false;
+    }
+  }
+
+  saveGameButton.addEventListener("click", () => saveCurrentGame());
+  saveAsButton.addEventListener("click", openSaveDialog);
+  document.getElementById("cancel-save-button").addEventListener("click", () => saveDialog.close());
+  saveGameForm.addEventListener("submit", event => {
+    event.preventDefault();
+    const name = saveNameInput.value.trim();
+    if (name) saveCurrentGame(name);
+  });
+
   async function initialize() {
     renderMapTransform();
     setRuntimeRunning(false);
-
-    try {
-      const s =
-        await api("/api/session");
-
-      if (s.game_loaded) {
-        const state =
-          await api(
-            "/api/simulation"
-          );
-
-        setGameLoaded(
-          s.game_name,
-          state
-        );
-      }
-    } catch (error) {
-      startupStatus.textContent =
-        error.message;
-    }
+    // Every launch begins with an explicit New Game / Load Game choice.
+    startupOverlay.hidden = false;
   }
 
   initialize();
