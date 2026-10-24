@@ -736,17 +736,19 @@ class Simulation(GardenMixin):
         return max(0.0, spec["capacity"] - current - reserved)
 
     def _transfer_limits_state(self):
-        result = {"house_pickup": {}, "house_storage": {}, "facilities": {}}
+        projected = self.projected_player_inventory()
+        result = {"house_pickup": {}, "house_storage": {}, "facilities": {}, "projected_inventory": projected}
         for rid, amount in self.game_state["house"]["outputs"].items():
             result["house_pickup"][rid] = self.transfer_limit(rid, amount, pickup=True)
         for rid in self.resource_definitions:
             result["house_storage"][rid] = {
                 "to_player": self.transfer_limit(rid, self._house_storage_amount(rid), pickup=True),
-                "to_house": self.transfer_limit(rid, self._player_inventory_amount(rid))}
+                "to_house": self.transfer_limit(rid, projected.get(rid, 0))}
         for instance in self.game_state["facilities"]:
-            entry = {"collect": {}, "deposit": {}, "room": {}}
+            entry = {"collect": {}, "collect_stock": {}, "deposit": {}, "room": {}}
             for rid, field in self.COLLECTION_SOURCES.get(instance.get("facility_id"), set()):
                 entry["collect"][rid] = self.transfer_limit(rid, self._collection_available(instance, rid, field), pickup=True)
+                entry["collect_stock"][rid] = self._collection_available(instance, rid, field)
             for rid in self.resource_definitions:
                 try:
                     spec = self._fill_spec(instance, rid)
@@ -754,9 +756,95 @@ class Simulation(GardenMixin):
                     continue
                 room = self._delivery_room(instance, spec)
                 entry["room"][rid] = room
-                entry["deposit"][rid] = self.transfer_limit(rid, self._player_inventory_amount(rid), destination_room=room)
+                entry["deposit"][rid] = self.transfer_limit(rid, projected.get(rid, 0), destination_room=room)
             result["facilities"][instance["instance_id"]] = entry
         return result
+
+    def _projected_pickup_limit(self, inventory, resource_id, amount):
+        mass = sum(self.resource_mass(r, a) for r, a in inventory.items() if a > 0)
+        unit_mass = self.resource_mass(resource_id, 1)
+        limit = min(amount, max(0.0, 50 - mass) / unit_mass) if unit_mass else amount
+        if self.resource_definitions.get(resource_id, {}).get("requires_container"):
+            used = sum(self.resource_volume(r, a) for r, a in inventory.items()
+                       if self.resource_definitions.get(r, {}).get("requires_container"))
+            limit = min(limit, max(0.0, inventory.get("bucket", 0) * 5 - used) / self.resource_volume(resource_id, 1))
+        if self.resource_definitions.get(resource_id, {}).get("quantity_mode") == "discrete":
+            limit = math.floor(limit + 1e-9)
+        return max(0.0, limit)
+
+    def projected_player_inventory(self, queue_index=None, reconcile=False):
+        """Replay physical cargo in execution order, including legacy prepaid cargo.
+
+        New deliveries reserve future availability, not physical stock. Reconciliation
+        reduces dependent transfers and cancels empty ones; it never grows a task.
+        """
+        queue = self.game_state["player"].setdefault("task_queue", [])
+        inventory = dict(self.game_state["player"].get("inventory", {}))
+        for task in queue:
+            if task.get("status") in {"cancelled", "invalid"}:
+                continue
+            cargo = task.get("reserved_cargo") or {}
+            if cargo.get("source") == "player":
+                rid = cargo["resource_id"]
+                inventory[rid] = inventory.get(rid, 0) + float(cargo.get("amount", 0))
+        collected = {}
+        delivered = {}
+        for task in list(queue[:queue_index]):
+            if task.get("status") in {"cancelled", "invalid"}:
+                continue
+            rid = task.get("resource_id")
+            if not rid:
+                continue
+            amount = max(0.0, float(task.get("amount", 0)))
+            incoming = task.get("type") in {"house_pickup", "facility_collect"} or (
+                task.get("type") == "house_storage_transfer" and task.get("transfer_direction") == "to_player")
+            outgoing = task.get("type") == "facility_fill" or (
+                task.get("type") == "house_storage_transfer" and task.get("transfer_direction") == "to_house") or (
+                task.get("reserved_cargo") or {}).get("source") == "player"
+            if incoming:
+                legal = self._projected_pickup_limit(inventory, rid, amount)
+                if task.get("type") == "facility_collect":
+                    try:
+                        instance = self._find_facility_instance(task["target_instance_id"])
+                        key = (instance["instance_id"], rid, task.get("source_field"))
+                        legal = min(legal, max(0, self._facility_output_amount(instance, rid, task.get("source_field")) - collected.get(key, 0)))
+                        collected[key] = collected.get(key, 0) + legal
+                    except ValueError:
+                        legal = 0.0
+            elif outgoing:
+                legal = min(amount, max(0.0, inventory.get(rid, 0)))
+                if task.get("type") == "facility_fill":
+                    try:
+                        instance = self._find_facility_instance(task["target_instance_id"])
+                        spec = self._fill_spec(instance, rid)
+                        shared = spec.get("capacity_mode") == "shared_total_mass"
+                        key = (instance["instance_id"], "shared" if shared else spec["field"])
+                        current = self._compost_total_mass(instance) if shared else float(instance.get(spec["field"], 0))
+                        if spec["capacity"] is not None:
+                            legal = min(legal, max(0, spec["capacity"] - current - delivered.get(key, 0)))
+                        delivered[key] = delivered.get(key, 0) + legal
+                    except ValueError:
+                        legal = 0.0
+                if rid == "bucket":
+                    used = sum(self.resource_volume(r, a) for r, a in inventory.items()
+                               if self.resource_definitions.get(r, {}).get("requires_container"))
+                    legal = min(legal, max(0.0, inventory.get(rid, 0) - math.ceil(max(0, used - 1e-9) / 5)))
+            else:
+                continue
+            if reconcile and legal < amount - 1e-9:
+                cargo = task.get("reserved_cargo") or {}
+                if cargo.get("source") in {"house_output", "house_storage", "player"}:
+                    self._refund_task_reservation({"reserved_cargo": {**cargo, "amount": amount - legal}})
+                if cargo:
+                    cargo["amount"] = legal
+                task["amount"] = legal
+                task["description"] += f" (adjusted to {legal:g}; earlier queue changed)"
+                self._append_pending_event({"type": "task_adjusted", "task_id": task["task_id"],
+                                            "description": task["description"], "amount": legal})
+                if legal <= 1e-9:
+                    queue.remove(task)
+            inventory[rid] = inventory.get(rid, 0) + (legal if incoming else -legal)
+        return inventory
 
     def resource_mass(self, resource_id, amount):
         definition = self.resource_definitions.get(resource_id)
@@ -772,13 +860,12 @@ class Simulation(GardenMixin):
         return self.resource_mass(resource_id, amount) / float(density) if density else 0.0
 
     def _committed_inventory(self):
-        # Reserved deliveries still physically travel with the Homesteader.
-        # Keep them in the conservative capacity envelope until completion;
-        # this also makes cancellation safe regardless of queue order.
+        # Conservative display total only; admission uses ordered projection.
+        # Future deposits do not add cargo already present or promised by pickups.
         inventory = dict(self.game_state["player"].get("inventory", {}))
         for task in self.game_state["player"].get("task_queue", []):
             cargo = task.get("reserved_cargo") or {}
-            if cargo or task.get("type") == "facility_collect":
+            if (cargo and cargo.get("source") != "projected_player") or task.get("type") == "facility_collect":
                 rid = task.get("resource_id")
                 inventory[rid] = inventory.get(rid, 0.0) + float(task.get("amount", 0.0))
         return inventory
@@ -797,22 +884,14 @@ class Simulation(GardenMixin):
         limit = max(0.0, float(available))
         if destination_room is not None:
             limit = min(limit, max(0.0, destination_room))
+        projected = self.projected_player_inventory()
         if pickup:
-            mass = self.resource_mass(resource_id, 1)
-            if mass > 0:
-                limit = min(limit, max(0.0, 50.0 - self.carry_mass(True)) / mass)
-            if definition.get("requires_container"):
-                committed = self._committed_inventory()
-                # Only buckets already physically carried are available containers.
-                # All container-required bulk and liquids share their volume.
-                buckets = self._player_inventory_amount("bucket")
-                used = sum(self.resource_volume(r, a) for r, a in committed.items() if self.resource_definitions.get(r, {}).get("requires_container"))
-                limit = min(limit, max(0.0, buckets * 5.0 - used) / self.resource_volume(resource_id, 1))
+            limit = self._projected_pickup_limit(projected, resource_id, limit)
         if resource_id == "bucket" and not pickup:
-            contents = sum(self.resource_volume(r, a) for r, a in self._committed_inventory().items()
+            contents = sum(self.resource_volume(r, a) for r, a in projected.items()
                            if self.resource_definitions.get(r, {}).get("requires_container"))
             loaded_buckets = math.ceil(max(0.0, contents - 1e-9) / 5.0)
-            limit = min(limit, max(0.0, self._player_inventory_amount("bucket") - loaded_buckets))
+            limit = min(limit, max(0.0, projected.get("bucket", 0) - loaded_buckets))
         if definition.get("quantity_mode") == "discrete":
             limit = math.floor(limit + 1e-9)
         return max(0.0, limit)
@@ -1190,12 +1269,11 @@ class Simulation(GardenMixin):
             source = "house_storage"
             description = f"Pick up {amount:g} {resource_id.replace('_', ' ')} from House Storage"
         elif direction == "to_house":
-            available = self._player_inventory_amount(resource_id)
+            available = self.projected_player_inventory().get(resource_id, 0)
             amount = self._transfer_amount(resource_id, amount, available, pickup=direction == "to_player")
             if amount > available + 1e-9:
                 raise ValueError(f"The Homesteader is carrying only {available:g}.")
-            self._consume_player_inventory(resource_id, amount)
-            source = "player"
+            source = "projected_player"
             description = f"Drop off {amount:g} {resource_id.replace('_', ' ')} at House Storage"
         else:
             raise ValueError("Transfer direction must be to_player or to_house.")
@@ -1228,11 +1306,10 @@ class Simulation(GardenMixin):
             raise ValueError("A material must be selected.")
         instance = self._find_facility_instance(instance_id)
         spec = self._fill_spec(instance, resource_id)
-        available = self._player_inventory_amount(resource_id)
+        available = self.projected_player_inventory().get(resource_id, 0)
         remaining = self._delivery_room(instance, spec)
 
         amount = self._transfer_amount(resource_id, amount, available, destination_room=remaining)
-        self._consume_player_inventory(resource_id, amount)
         definition = self.facility_definitions.get(instance["facility_id"]) or {}
         return self._queue_task({
             "type": "facility_fill",
@@ -1242,7 +1319,7 @@ class Simulation(GardenMixin):
             "amount": amount,
             "target_field": spec["field"],
             "unit": spec["unit"],
-            "reserved_cargo": {"resource_id": resource_id, "amount": amount, "source": "player"},
+            "reserved_cargo": {"resource_id": resource_id, "amount": amount, "source": "projected_player"},
             "work_minutes_total": 1,
             "work_minutes_remaining": 1,
         })
@@ -1332,6 +1409,7 @@ class Simulation(GardenMixin):
                     "task_id": task_id,
                     "task_type": removed.get("type"),
                 })
+                self.projected_player_inventory(reconcile=True)
                 self.save()
                 return deepcopy(removed)
         raise ValueError("Task not found.")
@@ -1370,6 +1448,19 @@ class Simulation(GardenMixin):
 
     def _complete_task_effect(self, task):
         task_type = task.get("type")
+        if (task.get("reserved_cargo") or {}).get("source") == "projected_player":
+            rid = task["resource_id"]
+            amount = min(float(task["amount"]), self._player_inventory_amount(rid))
+            if task_type == "facility_fill":
+                instance = self._find_facility_instance(task["target_instance_id"])
+                if instance.get("facility_id") == "garden-plot" and not instance.get("crop_id"):
+                    task["delivery_result"] = "Crop finished; water remains carried."
+                    return
+                spec = self._fill_spec(instance, rid)
+                if spec["capacity"] is not None:
+                    current = self._compost_total_mass(instance) if spec.get("capacity_mode") == "shared_total_mass" else float(instance.get(spec["field"], 0))
+                    amount = min(amount, max(0, spec["capacity"] - current))
+            task["amount"] = self._consume_player_inventory(rid, amount)
         if task_type == "garden_work":
             self._complete_garden_work(task)
         elif task_type == "house_pickup":
@@ -1423,6 +1514,7 @@ class Simulation(GardenMixin):
 
     def _advance_task_one_minute(self):
         player = self.game_state["player"]
+        self.projected_player_inventory(reconcile=True)
         queue = player.setdefault("task_queue", [])
         if not queue:
             return {"status": "idle", "completed": False, "phase": "idle"}

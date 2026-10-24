@@ -178,10 +178,11 @@ def test_reducing_grass_reduces_assimilation(sim):
     second=sim._process_default_tile()['potential_scat_assimilation_lb']
     assert first-second==pytest.approx(500*.005/24,abs=2e-6)
 
-def test_reserved_deposit_cannot_free_capacity_early(sim):
-    sim._add_player_inventory('feed',50)
-    sim.queue_house_storage_transfer('feed','all','to_house')
-    sim.game_state['house']['outputs']['kitchen_waste']=20
-    with pytest.raises(ValueError): sim.queue_house_pickup('kitchen_waste',1)
+def test_earlier_deposit_frees_capacity_at_later_pickup(sim):
+    sim._add_player_inventory('feed', 50)
+    sim.queue_house_storage_transfer('feed', 'all', 'to_house')
+    sim.game_state['house']['outputs']['kitchen_waste'] = 20
+    assert sim.queue_house_pickup('kitchen_waste', 'all')['amount'] == 20
     finish(sim)
-    assert sim.queue_house_pickup('kitchen_waste','all')['amount']==20
+    assert sim._player_inventory_amount('kitchen_waste') == 20
+    assert sim.carry_mass() <= 50

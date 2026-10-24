@@ -77,8 +77,6 @@ if (landGrid) {
   let runtimeTimer = null;
   let advanceInFlight = false;
   let gameLoaded = false;
-  let interactionOpen = false;
-  let inspectorPausedRuntime = false;
 
   for (let row = 0; row < GRID_SIZE; row += 1) {
     for (let column = 0; column < GRID_SIZE; column += 1) {
@@ -125,7 +123,7 @@ if (landGrid) {
 
   function currentSpeedMinutes() {
     const value = Number(gameSpeedSelect?.value ?? 1);
-    return Number.isFinite(value) && value > 0 ? Math.floor(value) : 1;
+    return Number.isFinite(value) && value >= 0 ? Math.floor(value) : 1;
   }
 
   function speedLabel(minutes) {
@@ -141,10 +139,25 @@ if (landGrid) {
     if (runtimeLabel) runtimeLabel.textContent = label ?? (running ? "Running" : "Paused");
   }
 
+  function isManagingContents() {
+    return !inspectorOverlay.hidden &&
+      ["contents", "storage", "order"].includes(inspectorMode);
+  }
+
   function startRuntime() {
-    if (runtimeTimer !== null || interactionOpen || !gameLoaded) return;
+    if (isManagingContents()) {
+      stopRuntime("Paused for management");
+      return;
+    }
+    if (currentSpeedMinutes() === 0) {
+      stopRuntime();
+      return;
+    }
+    if (!gameLoaded) return;
     setRuntimeRunning(true, `Running · ${speedLabel(currentSpeedMinutes())}`);
-    runtimeTimer = window.setInterval(runGamePulse, GAME_PULSE_MS);
+    if (runtimeTimer === null) {
+      runtimeTimer = window.setInterval(runGamePulse, GAME_PULSE_MS);
+    }
   }
 
   function stopRuntime(label = "Paused") {
@@ -156,17 +169,18 @@ if (landGrid) {
   }
 
   async function advanceSimulation(minutes, message = null) {
-    if (!gameLoaded || advanceInFlight || interactionOpen) return null;
+    if (!gameLoaded || advanceInFlight || isManagingContents()) return null;
     advanceInFlight = true;
     if (nextDayButton) nextDayButton.disabled = true;
     try {
       const result = await api("/api/advance", { method: "POST", body: JSON.stringify({ minutes }) });
-      renderState(result.state, result.activity ?? result.movement ?? null);
+      // A tick requested before management opened may still complete.
+      // Update the world without rebuilding the form the user is editing.
+      renderState(result.state, result.activity ?? result.movement ?? null, !isManagingContents());
       if (message) statusLine.textContent = message;
       return result;
     } catch (error) {
-      stopRuntime("Stopped");
-      statusLine.textContent = `Automatic time stopped: ${error.message}`;
+      statusLine.textContent = `Could not advance time: ${error.message}`;
       return null;
     } finally {
       advanceInFlight = false;
@@ -174,7 +188,10 @@ if (landGrid) {
     }
   }
 
-  async function runGamePulse() { await advanceSimulation(currentSpeedMinutes()); }
+  async function runGamePulse() {
+    const minutes = currentSpeedMinutes();
+    if (minutes > 0) await advanceSimulation(minutes);
+  }
 
   function setDateAndClock(state) {
     const dateElement = document.getElementById("simulation-date");
@@ -613,33 +630,11 @@ if (landGrid) {
     }
   }
 
-  function beginInteractionPause() {
-    interactionOpen = true;
-    inspectorPausedRuntime =
-      runtimeTimer !== null;
-
-    if (inspectorPausedRuntime) {
-      stopRuntime(
-        "Paused for interaction"
-      );
-    }
-  }
-
-  function closeInspector({ resume = true } = {}) {
-    const shouldResume =
-      resume &&
-      inspectorPausedRuntime &&
-      gameLoaded;
-
+  function closeInspector() {
     inspectorOverlay.hidden = true;
     selectedMapObject = null;
     inspectorMode = "summary";
-    interactionOpen = false;
-    inspectorPausedRuntime = false;
-
-    if (shouldResume) {
-      startRuntime();
-    }
+    startRuntime();
   }
 
   function compostStatus(instance) {
@@ -1077,7 +1072,6 @@ if (landGrid) {
   }
 
   function openSelection(column, row) {
-    beginInteractionPause();
     inspectorMode = "summary";
 
     const instance =
@@ -1137,6 +1131,7 @@ if (landGrid) {
 
     inspectorOverlay.hidden =
       false;
+    startRuntime();
   }
 
   function openHouseSelection(
@@ -1146,8 +1141,6 @@ if (landGrid) {
       simulationState?.house;
 
     if (!house) return;
-
-    beginInteractionPause();
 
     const p =
       house.entrance ??
@@ -1196,6 +1189,7 @@ if (landGrid) {
 
     inspectorOverlay.hidden =
       false;
+    startRuntime();
   }
 
   function openHouseStorage(
@@ -1205,8 +1199,6 @@ if (landGrid) {
       simulationState?.house;
 
     if (!house) return;
-
-    beginInteractionPause();
 
     const p =
       house.storage_point ??
@@ -1248,6 +1240,7 @@ if (landGrid) {
 
     inspectorOverlay.hidden =
       false;
+    startRuntime();
   }
 
   function queuedFillAmount(
@@ -1694,9 +1687,9 @@ if (landGrid) {
         `Queued: ${formatAmount(
           queued
         )} ${o.unit} · ` +
-        `Carried: ${formatAmount(
+        `Currently carried: ${formatAmount(
           carried
-        )} ${o.unit}` +
+        )} ${o.unit} | Projected available by this task: ${formatAmount(simulationState?.transfer_limits?.projected_inventory?.[o.resourceId] ?? carried)} ${o.unit}` +
         (
           o.capacity == null
             ? ""
@@ -1769,7 +1762,7 @@ if (landGrid) {
 
       capTransferInput(input, Number(input.max), isDiscrete(o.resourceId));
       form.append(label, button);
-      appendTransferAll(form, input, "Drop off all");
+      appendTransferAll(form, input, "Deposit All");
 
       form.addEventListener(
         "submit",
@@ -1834,7 +1827,9 @@ if (landGrid) {
           o.sourceField
         );
 
-      const available = simulationState?.transfer_limits?.facilities?.[selection.instance.instance_id]?.collect?.[o.resourceId] ?? 0;
+      const collectionLimits = simulationState?.transfer_limits?.facilities?.[selection.instance.instance_id];
+      const available = collectionLimits?.collect?.[o.resourceId] ?? 0;
+      const stock = collectionLimits?.collect_stock?.[o.resourceId] ?? Math.max(0, o.available - reserved);
 
       const card =
         document.createElement("section");
@@ -1854,9 +1849,8 @@ if (landGrid) {
         "contents-stats";
 
       stats.textContent =
-        `Available to collect: ${formatAmount(
-          available
-        )} ${o.unit}` +
+        `Available to collect: ${formatAmount(stock)} ${o.unit} | Pickup limit at this queue position: ${formatAmount(available)} ${o.unit}` +
+        (stock > available + 1e-9 ? " | Limited by carry weight or shared bucket space; pick up a bucket for loose bulk." : "") +
         (
           reserved > 0
             ? ` · Reserved by queued tasks: ${formatAmount(
@@ -2155,6 +2149,7 @@ if (landGrid) {
   function storageResourceIds() {
     return [
       ...new Set([
+        ...Object.keys(simulationState?.transfer_limits?.projected_inventory ?? {}),
         ...Object.keys(
           simulationState?.house
             ?.storage ??
@@ -2182,7 +2177,7 @@ if (landGrid) {
               ?.[id] ??
             0
           ) >
-            1e-9
+            1e-9 || Number(simulationState?.transfer_limits?.projected_inventory?.[id] ?? 0) > 1e-9
       )
       .sort(
         (a, b) =>
@@ -2290,7 +2285,7 @@ if (landGrid) {
         )} ${unit} · ` +
         `Carried: ${formatAmount(
           carried
-        )} ${unit}`;
+        )} ${unit} | Projected available by this task: ${formatAmount(simulationState?.transfer_limits?.projected_inventory?.[id] ?? carried)} ${unit}`;
 
       card.append(h, p);
 
@@ -2595,6 +2590,7 @@ if (landGrid) {
           selectedMapObject
         );
       }
+      startRuntime();
     }
   );
 
@@ -2739,6 +2735,16 @@ if (landGrid) {
     }
 
     taskQueueList.replaceChildren();
+    const adjustments = [
+      ...(simulationState?.last_full_tick_events ?? []),
+      ...(simulationState?.pending_events ?? []),
+    ].filter(event => event.type === "task_adjusted").slice(-3);
+    for (const event of adjustments) {
+      const note = document.createElement("p");
+      note.className = "panel-note";
+      note.textContent = event.description;
+      taskQueueList.appendChild(note);
+    }
 
     if (queue.length <= 1) {
       const p =
@@ -3271,6 +3277,16 @@ if (landGrid) {
     );
   }
 
+  function facilityTooltip(instance, name) {
+    const hours = Number(instance.accrued_labor_requirement ?? 0);
+    if (!(hours > 1 / 3)) return name;
+    const minutes = Math.round(hours * 60);
+    const h = Math.floor(minutes / 60);
+    const m = minutes % 60;
+    const duration = h ? `${h} h${m ? ` ${m} min` : ""}` : `${m} min`;
+    return `${name}\nLabor due: ${duration}`;
+  }
+
   function renderPlacements() {
     landGrid
       .querySelectorAll(
@@ -3295,25 +3311,28 @@ if (landGrid) {
       const image =
         document.createElement("img");
 
-      image.className =
-        "building-sprite placed-building";
+      image.className = "building-sprite";
+      const hitbox = document.createElement("div");
+      hitbox.className = "placed-building";
 
       image.src =
         `/static/assets/sprites/${d.image}`;
 
       image.alt = i.garden_status?.display_name ?? d.name;
-      image.title = image.alt;
+      image.title = facilityTooltip(i, image.alt);
 
-      image.dataset.instanceId =
+      hitbox.title = image.title;
+      hitbox.dataset.instanceId =
         i.instance_id;
 
-      image.style.gridColumn =
+      hitbox.style.gridColumn =
         `${i.column + 1} / span ${i.width}`;
 
-      image.style.gridRow =
+      hitbox.style.gridRow =
         `${i.row + 1} / span ${i.height}`;
 
-      landGrid.appendChild(image);
+      hitbox.appendChild(image);
+      landGrid.appendChild(hitbox);
     }
 
     renderHouse();
@@ -3930,7 +3949,8 @@ if (landGrid) {
 
   function renderState(
     state,
-    activity = null
+    activity = null,
+    refreshInspector = true
   ) {
     simulationState = state;
     definitionsById.clear();
@@ -3949,7 +3969,7 @@ if (landGrid) {
     setDateAndClock(state);
     renderBuildList();
     renderPlacements();
-    refreshOpenInspector();
+    if (refreshInspector) refreshOpenInspector();
     renderAvatar(activity);
     renderHouseholdPanels();
   }
@@ -4017,9 +4037,7 @@ if (landGrid) {
         event.target.closest
           ?.(".house-eaves");
 
-      const facility =
-        event.target.closest
-          ?.(".placed-building");
+      const facility = facilityAt(column, row);
 
       if (storage) {
         if (selectedBuildId) {
@@ -4080,23 +4098,7 @@ if (landGrid) {
     }
   );
 
-  gameSpeedSelect
-    ?.addEventListener(
-      "change",
-      () => {
-        if (
-          runtimeTimer !== null &&
-          !interactionOpen
-        ) {
-          setRuntimeRunning(
-            true,
-            `Running · ${speedLabel(
-              currentSpeedMinutes()
-            )}`
-          );
-        }
-      }
-    );
+  gameSpeedSelect?.addEventListener("change", startRuntime);
 
   nextDayButton
     ?.addEventListener(
@@ -4104,7 +4106,6 @@ if (landGrid) {
       async () => {
         if (
           !gameLoaded ||
-          interactionOpen ||
           advanceInFlight
         ) {
           return;
