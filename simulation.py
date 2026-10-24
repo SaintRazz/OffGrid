@@ -1,5 +1,6 @@
 import json
 import math
+from garden import GardenMixin
 from copy import deepcopy
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -13,6 +14,9 @@ YARD_FORAGE_CAP_DAYS = 3.0
 EGG_GROCERY_VALUE_USD = 0.20
 
 ORDER_CATALOG = {
+    "seed_potato": {"resource_id": "seed_potato", "name": "Seed potatoes", "unit": "lb", "integer_only": False},
+    "tomato_transplant": {"resource_id": "tomato_transplant", "name": "Tomato transplants", "unit": "plant", "integer_only": True},
+    "commercial_garden_amendment": {"resource_id": "commercial_garden_amendment", "name": "Commercial garden amendment", "unit": "lb", "integer_only": False},
     "bucket": {"resource_id": "bucket", "name": "Five-gallon bucket", "unit": "bucket", "integer_only": True},
     "feed": {
         "resource_id": "feed",
@@ -41,7 +45,7 @@ ORDER_CATALOG = {
 }
 
 
-class Simulation:
+class Simulation(GardenMixin):
     """
     Core simulation engine.
 
@@ -56,7 +60,9 @@ class Simulation:
         resources_file,
         household_profile_file,
         game_state_file,
+        crop_file=None,
     ):
+        self.crop_file = Path(crop_file) if crop_file else Path(facilities_file).with_name("crop.json")
         self.facilities_file = Path(facilities_file)
         self.resources_file = Path(resources_file)
         self.household_profile_file = Path(household_profile_file)
@@ -77,6 +83,8 @@ class Simulation:
     # ------------------------------------------------------------------
 
     def load_definitions(self):
+        self.crop_config = json.loads(self.crop_file.read_text(encoding="utf-8"))
+        self.crop_definitions = self.crop_config["crops"]
         with self.facilities_file.open(encoding="utf-8") as file:
             self.facility_config = json.load(file)
 
@@ -248,6 +256,7 @@ class Simulation:
             old_task.setdefault("work_minutes_remaining", 0)
             queue.append(old_task)
 
+        self._migrate_garden_footprints()
         for instance in self.game_state["facilities"]:
             self._normalize_instance(instance)
 
@@ -328,6 +337,9 @@ class Simulation:
             instance.setdefault("active_compost_mass", 0.0)
             instance.setdefault("mature_compost_mass", 0.0)
 
+        if facility_id == "garden-plot":
+            self._normalize_garden(instance)
+
     def household_daily_baseline(self):
         """
         Return the static daily household baseline from HouseholdProfile.json.
@@ -393,6 +405,8 @@ class Simulation:
         for instance in self.game_state["facilities"]:
             if instance.get("facility_id") == "compost-pile":
                 instance["carbon_balance"] = self.compost_balance(instance)
+            if instance.get("facility_id") == "garden-plot":
+                instance["garden_status"] = self.garden_status(instance)
         day = int(self.game_state["time"].get("day", 1))
         hour = int(self.game_state["time"].get("hour", 0))
         minute = int(self.game_state["time"].get("minute", 0))
@@ -538,6 +552,10 @@ class Simulation:
             ),
             "resource_definitions": deepcopy(self.resource_definitions),
             "order_catalog": deepcopy(ORDER_CATALOG),
+            "crop_definitions": deepcopy(self.crop_definitions),
+            "garden_preparation": {"labor_hours": self.garden_rules()["preparation_labor_hours"],
+                                   "amendments_lb": {r: self._amendment_requirement({"fertility": 0}, r) for r in self.garden_rules()["amendments"]}},
+            "environment": deepcopy(self.facility_config["environment"]),
             "transfer_limits": self._transfer_limits_state(),
             "instances": deepcopy(self.game_state["facilities"]),
         }
@@ -610,6 +628,16 @@ class Simulation:
             ):
                 raise ValueError("Facility footprint overlaps another structure.")
 
+        amendment = None
+        if facility_id == "garden-plot":
+            if self.game_state["map"].get("default_tile") != "grass-tile" or any(
+                t.get("column", t.get("x")) == column and t.get("row", t.get("y")) == row
+                and t.get("type") != "grass-tile" for t in self.game_state.get("tile_states", [])
+            ):
+                raise ValueError("Prepare a garden only on unimproved grass.")
+            amendment = self._choose_amendment({"fertility": 0.0})
+            self._nearest_adjacent_tile({"column": column, "row": row, "width": 1, "height": 1})
+
         instance = self._create_instance(
             definition=definition,
             column=column,
@@ -620,6 +648,10 @@ class Simulation:
         )
 
         self.game_state["facilities"].append(instance)
+        if facility_id == "garden-plot":
+            self._normalize_garden(instance)
+            instance.update(plot_state="preparing", fertility=0.0)
+            self._queue_garden_work(instance, "prepare", self.garden_rules()["preparation_labor_hours"], *amendment)
         self.save()
         return deepcopy(instance)
 
@@ -682,6 +714,7 @@ class Simulation:
     COLLECTION_SOURCES = {
         "chicken-coop": {("eggs", None)},
         "rain-barrel": {("non_potable_water", "current_fill")},
+        "garden-plot": {("potato", None), ("tomato", None)},
         "compost-pile": {("compost", "mature_compost_mass")},
         "bsfl-reactor": {("insect_forage", None), ("active_compost", "residue_mass")},
     }
@@ -811,6 +844,11 @@ class Simulation:
         definition = self.facility_definitions.get(facility_id) or {}
         container = definition.get("container") or {}
         process = definition.get("process") or {}
+
+        if facility_id == "garden-plot" and resource_id == "non_potable_water":
+            if instance.get("plot_state") not in {"planted", "harvestable"} or not instance.get("crop_id"):
+                raise ValueError("Irrigate only a growing crop.")
+            return {"field": "irrigation_water_gal", "capacity": self.garden_rules()["irrigation_capacity_gal"], "unit": "gal", "integer_only": False}
 
         if facility_id == "chicken-coop":
             if resource_id == "chicken":
@@ -1228,6 +1266,9 @@ class Simulation:
             raise ValueError(f"Only {free:g} is available to collect.")
 
         definition = self.facility_definitions.get(instance["facility_id"]) or {}
+        picking_minutes = 1
+        if instance.get("facility_id") == "garden-plot" and resource_id == "tomato":
+            picking_minutes = max(1, math.ceil(self.crop_definitions["beefsteak_tomato"]["harvest_labor_hours"] * 60))
         return self._queue_task({
             "type": "facility_collect",
             "description": f"Collect {amount:g} {resource_def.get('name', resource_id)} from {definition.get('name', instance['facility_id'])}",
@@ -1235,8 +1276,8 @@ class Simulation:
             "resource_id": resource_id,
             "amount": amount,
             "source_field": source_field,
-            "work_minutes_total": 1,
-            "work_minutes_remaining": 1,
+            "work_minutes_total": picking_minutes,
+            "work_minutes_remaining": picking_minutes,
         })
 
     def queue_service_facility(self, instance_id):
@@ -1284,6 +1325,8 @@ class Simulation:
             if task.get("task_id") == task_id:
                 removed = queue.pop(index)
                 self._refund_task_reservation(removed)
+                if removed.get("type") == "garden_work" and removed.get("garden_action") == "prepare":
+                    self.game_state["facilities"] = [p for p in self.game_state["facilities"] if p.get("instance_id") != removed["target_instance_id"]]
                 self._append_pending_event({
                     "type": "task_cancelled",
                     "task_id": task_id,
@@ -1327,7 +1370,9 @@ class Simulation:
 
     def _complete_task_effect(self, task):
         task_type = task.get("type")
-        if task_type == "house_pickup":
+        if task_type == "garden_work":
+            self._complete_garden_work(task)
+        elif task_type == "house_pickup":
             self._add_player_inventory(task["resource_id"], float(task["amount"]))
         elif task_type == "house_storage_transfer":
             if task.get("transfer_direction") == "to_player":
@@ -1345,7 +1390,11 @@ class Simulation:
         elif task_type == "facility_fill":
             instance = self._find_facility_instance(task["target_instance_id"])
             field = task["target_field"]
-            instance[field] = max(0.0, float(instance.get(field, 0.0))) + float(task["amount"])
+            if instance.get("facility_id") == "garden-plot" and not instance.get("crop_id"):
+                self._refund_task_reservation(task)
+                task["delivery_result"] = "Crop finished; water returned to carried inventory."
+            else:
+                instance[field] = max(0.0, float(instance.get(field, 0.0))) + float(task["amount"])
         elif task_type == "facility_collect":
             instance = self._find_facility_instance(task["target_instance_id"])
             amount = float(task["amount"])
@@ -1597,6 +1646,8 @@ class Simulation:
         self._accrue_labor(instance, definition)
         self._apply_degradation(instance, definition)
 
+        if facility_id == "garden-plot":
+            return self._process_garden(instance, definition)
         if facility_id == "chicken-coop":
             return self._process_chicken_coop(instance, definition)
         if facility_id == "rain-barrel":
@@ -1956,10 +2007,8 @@ class Simulation:
         capacity = float(container.get("capacity", 0.0))
         current = max(0.0, float(instance.get("current_fill", 0.0)))
 
-        daily_inflow = 0.0
         rain_rule = definition.get("inputs", {}).get("rainwater", {})
-        if rain_rule.get("average_rate_per_day") is not None:
-            daily_inflow = float(rain_rule["average_rate_per_day"])
+        daily_inflow = self.rainfall_gallons_per_day(float(rain_rule.get("catchment_area_sq_ft", 100)))
 
         inflow = daily_inflow / HOURS_PER_DAY
         room = max(0.0, capacity - current)

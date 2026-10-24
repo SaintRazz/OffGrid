@@ -30,6 +30,7 @@ def create_simulation(game_state_file):
         resources_file=RESOURCES_FILE,
         household_profile_file=HOUSEHOLD_PROFILE_FILE,
         game_state_file=game_state_file,
+        crop_file=BASE_DIR / "crop.json",
     )
 
 
@@ -371,6 +372,20 @@ def collect_facility_output(instance_id):
         "task": task,
         "state": state,
     })
+
+
+@app.post("/api/gardens/<instance_id>/action")
+def garden_action(instance_id):
+    payload = request.get_json(silent=True) or {}
+    try:
+        with SIMULATION_LOCK:
+            task = get_simulation().queue_garden_action(
+                instance_id, payload.get("action"), crop_id=payload.get("crop_id"),
+                amendment_resource_id=payload.get("amendment_resource_id"), event_id=payload.get("event_id"))
+            state = get_simulation().state()
+    except (RuntimeError, OSError, TypeError, ValueError, KeyError) as exc:
+        return jsonify({"error": str(exc)}), 400
+    return jsonify({"status": "queued", "task": task, "state": state})
 
 
 @app.post("/api/facilities/<instance_id>/service")

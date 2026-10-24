@@ -300,9 +300,9 @@
       "market_price": null,
       "inputs": {
         "rainwater": {
-          "average_rate_per_day": 10.0,
+          "catchment_area_sq_ft": 100,
           "unit": "gal",
-          "source": "100_sq_ft_roof_catchment"
+          "source": "shared_environment"
         }
       },
       "outputs": {
@@ -334,10 +334,10 @@
     },
     {
       "id": "garden-plot",
-      "name": "In-ground garden plot",
+      "name": "Prepared Garden Plot",
       "image": "InGroundPlot.png",
-      "width": 4,
-      "height": 2,
+      "width": 1,
+      "height": 1,
       "market_price": null,
       "inputs": {},
       "outputs": {},
@@ -354,9 +354,29 @@
         "prerequisites": []
       },
       "notes": [
-        "Crop-dependent inputs, outputs, labor, and production rates are intentionally deferred.",
-        "Garden behavior will be defined through a later planting/crop layer."
-      ]
+        "Permanent converted garden soil; crop biology is configured in crop.json.",
+        "Preparation and remediation labor are gameplay calibrations."
+      ],
+      "garden": {
+        "area_sq_ft": 25,
+        "preparation_labor_hours": 1.5,
+        "remediation_labor_hours": 0.25,
+        "target_fertility": 95,
+        "poor_fertility_warning_below": 50,
+        "irrigation_capacity_gal": 5,
+        "amendments": {
+          "compost": {
+            "fertility_per_lb": 9.5
+          },
+          "commercial_garden_amendment": {
+            "fertility_per_lb": 47.5
+          }
+        }
+      }
     }
-  ]
+  ],
+  "environment": {
+    "average_rainfall_inches_per_day": 0.16,
+    "gallons_per_inch_sq_ft": 0.6233766
+  }
 }

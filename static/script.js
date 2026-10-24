@@ -504,7 +504,7 @@ if (landGrid) {
       renderState(result.state);
       cancelPlacement();
       statusLine.textContent =
-        `${def.name} placed.`;
+        def.id === "garden-plot" ? "Soil preparation queued; carried amendment reserved." : `${def.name} placed.`;
     } catch (error) {
       statusLine.textContent = error.message;
     }
@@ -709,8 +709,88 @@ if (landGrid) {
     );
   }
 
+  async function submitGardenAction(instanceId, payload) {
+    try {
+      const result = await api(`/api/gardens/${encodeURIComponent(instanceId)}/action`, {
+        method: "POST", body: JSON.stringify(payload),
+      });
+      renderState(result.state);
+      statusLine.textContent = "Garden task queued.";
+    } catch (error) { statusLine.textContent = error.message; }
+  }
+
+  function appendGardenPanel(selection) {
+    const plot = selection.instance;
+    const g = plot?.garden_status;
+    if (!g) return;
+    inspectorTitle.textContent = g.display_name;
+    const dl = document.createElement("dl");
+    dl.className = "selection-summary";
+    const rows = [
+      ["Status", g.state_description], ["Fertility", `${formatAmount(g.fertility, 1)} / 100`],
+      ["Fertility warning", g.fertility_warning || "None"], ["Crop", g.crop_name || "None"],
+      ["Soil preparation", g.state === "preparing" ? "In progress" : "Complete"],
+      ["Crop age", `${formatAmount(g.crop_age_days, 1)} days${g.season_days ? ` / ${g.season_days}` : ""}`],
+      ["Phase", g.phase || "No active crop"],
+      ["Next phase in", g.days_until_next_phase == null ? "--" : `${formatAmount(g.days_until_next_phase, 1)} days`],
+      ["Water demand", `${formatAmount(g.water_requirement_gal_per_day, 2)} gal/day`],
+      ["Environmental rainfall", `${formatAmount(g.rainfall_gal_per_day, 2)} gal/day (${formatAmount(g.effective_rainfall_gal_per_day, 2)} effective)`],
+      ["Supplemental water demand", `${formatAmount(g.supplemental_water_gal_per_day, 2)} gal/day`],
+      ["Irrigation still needed for next day", `${formatAmount(g.supplemental_water_still_required_gal, 2)} gal`],
+      ["Delivered irrigation water", `${formatAmount(g.irrigation_water_gal, 2)} gal`],
+      ["Current water satisfaction", `${formatAmount(g.current_water_satisfaction * 100, 1)}%`],
+      ["Season water / labor / fertility", `${formatAmount(g.performance.water * 100, 1)}% / ${formatAmount(g.performance.labor * 100, 1)}% / ${formatAmount(g.performance.fertility * 100, 1)}%`],
+      ["Routine labor owed", `${formatAmount(g.routine_labor_hours, 3)} h`],
+      ["Next major event", g.next_event ? `${g.next_event.name}: day ${g.next_event.day}, ${g.next_event.labor_hours} h` : "None"],
+      ["Full seasonal yield", g.full_yield_lb == null ? "--" : `${formatAmount(g.full_yield_lb, 2)} lb`],
+      ["Projected seasonal yield", `${formatAmount(g.projected_yield_lb, 2)} lb`],
+      ["Seasonal yield produced", `${formatAmount(g.seasonal_yield_produced_lb, 2)} lb`],
+    ];
+    for (const [label, value] of rows) {
+      const dt = document.createElement("dt"), dd = document.createElement("dd");
+      dt.textContent = label; dd.textContent = value; dl.append(dt, dd);
+    }
+    inspectorContent.appendChild(dl);
+    const addAction = (label, payload) => {
+      const button = document.createElement("button");
+      button.type = "button"; button.className = "interaction-button";
+      button.textContent = label; button.disabled = g.busy;
+      button.addEventListener("click", () => submitGardenAction(plot.instance_id, payload));
+      inspectorContent.appendChild(button);
+    };
+    if (g.state === "prepared") {
+      for (const [cropId, crop] of Object.entries(simulationState.crop_definitions ?? {})) {
+        addAction(`Plant ${crop.name} (${crop.planting_quantity} ${resourceUnit(crop.planting_resource)}, ${crop.planting_labor_hours} h)`, {action: "plant", crop_id: cropId});
+      }
+    }
+    if (g.state === "harvested") {
+      for (const [rid, quantity] of Object.entries(g.amendment_requirements_lb)) {
+        addAction(`Remediate: ${formatAmount(quantity, 2)} lb ${resourceLabel(rid)} + ${g.remediation_labor_hours} h`, {action: "remediate", amendment_resource_id: rid});
+      }
+    }
+    if (g.state === "harvestable" && simulationState.crop_definitions?.[plot.crop_id]?.growth_habit === "annual_single_harvest") {
+      addAction("Dig potato harvest (output stays at plot)", {action: "harvest"});
+    }
+    for (const event of g.due_events) addAction(`${event.name} (${event.labor_hours} h)`, {action: "event", event_id: event.id});
+    const note = document.createElement("p");
+    note.className = "contents-message";
+    note.textContent = "Use Service Facility for routine labor. Manage Contents delivers carried bucket water and collects local harvests. Crop tasks take time after travel; labor rates are gameplay calibrations.";
+    inspectorContent.appendChild(note);
+    for (const [rid, amount] of Object.entries(g.stored_outputs)) {
+      if (amount > 0) {
+        const dt = document.createElement("dt"), dd = document.createElement("dd");
+        dt.textContent = `Local ${resourceLabel(rid)}`; dd.textContent = `${formatAmount(amount, 2)} ${resourceUnit(rid)}`;
+        dl.append(dt, dd);
+      }
+    }
+  }
+
   function renderSelectionSummary(selection) {
     inspectorContent.replaceChildren();
+    if (selection.instance?.facility_id === "garden-plot") {
+      appendGardenPanel(selection);
+      return;
+    }
 
     const dl =
       document.createElement("dl");
@@ -978,6 +1058,22 @@ if (landGrid) {
     }
 
     inspectorContent.appendChild(dl);
+    if (!selection.instance && selection.kind === "map") {
+      const button = document.createElement("button");
+      button.type = "button"; button.className = "interaction-button";
+      const preparation = simulationState.garden_preparation;
+      const choices = Object.entries(preparation?.amendments_lb ?? {}).map(([rid, amount]) => `${formatAmount(amount, 2)} lb ${resourceLabel(rid)}`).join(" or ");
+      button.textContent = `Prepare garden (${preparation?.labor_hours} h + ${choices}, carried)`;
+      button.addEventListener("click", async () => {
+        try {
+          const result = await api("/api/facilities", {method: "POST", body: JSON.stringify({facility_id: "garden-plot", column: selection.column, row: selection.row})});
+          renderState(result.state);
+          openSelection(selection.column, selection.row);
+          statusLine.textContent = "Soil preparation queued.";
+        } catch (error) { statusLine.textContent = error.message; }
+      });
+      inspectorContent.appendChild(button);
+    }
   }
 
   function openSelection(column, row) {
@@ -1012,7 +1108,7 @@ if (landGrid) {
     );
 
     inspectorTitle.textContent =
-      def?.name ??
+      instance?.garden_status?.display_name ?? def?.name ??
       (
         instance
           ? "Facility"
@@ -1261,6 +1357,9 @@ if (landGrid) {
     const process =
       d.process ?? {};
 
+    if (d.id === "garden-plot") {
+      return selection.instance?.crop_id ? [{resourceId: "non_potable_water", label: "Irrigation water", unit: "gal", currentField: "irrigation_water_gal", capacity: d.garden.irrigation_capacity_gal}] : [];
+    }
     if (d.id === "chicken-coop") {
       return [
         {
@@ -1387,6 +1486,7 @@ if (landGrid) {
       selection?.instance;
 
     if (!i) return [];
+    if (i.facility_id === "garden-plot") return ["potato", "tomato"].map(resourceId => ({resourceId, label: resourceLabel(resourceId), unit: "lb", sourceField: null, available: Number(i.stored_outputs?.[resourceId] ?? 0)}));
     if (i.facility_id === "rain-barrel") return [{resourceId: "non_potable_water", label: "Non-potable water", unit: "gal", sourceField: "current_fill", available: Number(i.current_fill ?? 0)}];
 
     if (
@@ -1516,6 +1616,8 @@ if (landGrid) {
         carbon
       );
     }
+
+    if (selection.instance.facility_id === "garden-plot") appendGardenPanel(selection);
 
     const intro =
       document.createElement("p");
@@ -3199,7 +3301,8 @@ if (landGrid) {
       image.src =
         `/static/assets/sprites/${d.image}`;
 
-      image.alt = d.name;
+      image.alt = i.garden_status?.display_name ?? d.name;
+      image.title = image.alt;
 
       image.dataset.instanceId =
         i.instance_id;
@@ -3726,7 +3829,7 @@ if (landGrid) {
 
         addListItem(
           operationsList,
-          d?.name ??
+          i.garden_status?.display_name ?? d?.name ??
             i.facility_id,
           label
         );

@@ -1,0 +1,148 @@
+{
+  "schema_version": 1,
+  "notes": [
+    "Yield and planting inputs use the agreed per-acre / 1764 * 0.75 gameplay scale. Water and manual labor do not use that factor.",
+    "All precise labor hours, fertility draws and performance thresholds are gameplay calibrations, not measured universal agronomic constants."
+  ],
+  "performance": {
+    "full_fertility_threshold": 50,
+    "labor_backlog_tolerance_hours": 0.5,
+    "minimum_labor_satisfaction": 0.1,
+    "labor_grace_hours": 0.05
+  },
+  "crops": {
+    "russet_burbank": {
+      "name": "Russet Burbank Potato",
+      "growth_habit": "annual_single_harvest",
+      "planting_resource": "seed_potato",
+      "planting_quantity": 0.8,
+      "planting_labor_hours": 0.5,
+      "harvest_resource": "potato",
+      "expected_harvest_lb": 19.3,
+      "harvest_labor_hours": 0.75,
+      "maturity_days": 125,
+      "season_days": 125,
+      "seasonal_fertility_draw": 40,
+      "phases": [
+        {
+          "name": "Establishment / emergence",
+          "end_day": 20,
+          "water_gal_per_day": 2.5,
+          "routine_labor_hours_per_day": 0.005
+        },
+        {
+          "name": "Vegetative growth",
+          "end_day": 45,
+          "water_gal_per_day": 3,
+          "routine_labor_hours_per_day": 0.015
+        },
+        {
+          "name": "Tuber initiation / bulking",
+          "end_day": 95,
+          "water_gal_per_day": 4,
+          "routine_labor_hours_per_day": 0.01
+        },
+        {
+          "name": "Maturation",
+          "end_day": 110,
+          "water_gal_per_day": 2,
+          "routine_labor_hours_per_day": 0.004
+        },
+        {
+          "name": "Senescence / skin set",
+          "end_day": 125,
+          "water_gal_per_day": 0.5,
+          "routine_labor_hours_per_day": 0.002
+        }
+      ],
+      "labor_events": [
+        {
+          "id": "early_weeding",
+          "name": "Early weeding",
+          "day": 12,
+          "labor_hours": 0.1
+        },
+        {
+          "id": "first_hilling",
+          "name": "First hilling",
+          "day": 28,
+          "labor_hours": 0.25
+        },
+        {
+          "id": "second_hilling",
+          "name": "Second hilling / bed maintenance",
+          "day": 48,
+          "labor_hours": 0.2
+        }
+      ]
+    },
+    "beefsteak_tomato": {
+      "name": "Generic Beefsteak Tomato",
+      "description": "Fictional standardized generic indeterminate beefsteak-type tomato.",
+      "growth_habit": "indeterminate",
+      "planting_resource": "tomato_transplant",
+      "planting_quantity": 2,
+      "planting_labor_hours": 0.4,
+      "harvest_resource": "tomato",
+      "expected_harvest_lb": 17,
+      "harvest_labor_hours": 0.08,
+      "maturity_days": 80,
+      "season_days": 143,
+      "harvest_interval_days": 2,
+      "seasonal_fertility_draw": 45,
+      "phases": [
+        {
+          "name": "Transplant establishment",
+          "end_day": 14,
+          "water_gal_per_day": 0.75,
+          "routine_labor_hours_per_day": 0.008
+        },
+        {
+          "name": "Vegetative growth",
+          "end_day": 35,
+          "water_gal_per_day": 1,
+          "routine_labor_hours_per_day": 0.02
+        },
+        {
+          "name": "Flowering / fruit set",
+          "end_day": 60,
+          "water_gal_per_day": 1.5,
+          "routine_labor_hours_per_day": 0.03
+        },
+        {
+          "name": "Fruit development / ripening",
+          "end_day": 80,
+          "water_gal_per_day": 1.75,
+          "routine_labor_hours_per_day": 0.025
+        },
+        {
+          "name": "Harvest production",
+          "end_day": 143,
+          "water_gal_per_day": 1.5,
+          "routine_labor_hours_per_day": 0.025
+        }
+      ],
+      "labor_events": [
+        {
+          "id": "early_weeding",
+          "name": "Early weeding",
+          "day": 10,
+          "labor_hours": 0.1
+        },
+        {
+          "id": "staking",
+          "name": "Staking / trellising",
+          "day": 21,
+          "labor_hours": 0.3
+        },
+        {
+          "id": "support",
+          "name": "Support inspection / tying",
+          "day": 40,
+          "labor_hours": 0.15
+        }
+      ],
+      "plot_display_name": "Beefsteak Tomato Garden Plot"
+    }
+  }
+}

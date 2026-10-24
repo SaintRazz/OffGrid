@@ -176,6 +176,51 @@
       "quantity_mode": "discrete",
       "mass_per_native_unit_lb": 2.0,
       "container_capacity_gal": 5.0
+    },
+    "seed_potato": {
+      "name": "Seed potatoes",
+      "unit": "lb",
+      "initial_stock": 0,
+      "category": "biological_materials",
+      "behavior": "stock",
+      "quantity_mode": "continuous",
+      "mass_per_native_unit_lb": 1
+    },
+    "potato": {
+      "name": "Potatoes",
+      "unit": "lb",
+      "initial_stock": 0,
+      "category": "biological_materials",
+      "behavior": "stock",
+      "quantity_mode": "continuous",
+      "mass_per_native_unit_lb": 1
+    },
+    "tomato_transplant": {
+      "name": "Tomato transplant",
+      "unit": "plant",
+      "initial_stock": 0,
+      "category": "biological_materials",
+      "behavior": "stock",
+      "quantity_mode": "discrete",
+      "mass_per_native_unit_lb": 0.25
+    },
+    "tomato": {
+      "name": "Tomatoes",
+      "unit": "lb",
+      "initial_stock": 0,
+      "category": "biological_materials",
+      "behavior": "stock",
+      "quantity_mode": "continuous",
+      "mass_per_native_unit_lb": 1
+    },
+    "commercial_garden_amendment": {
+      "name": "Commercial garden amendment",
+      "unit": "lb",
+      "initial_stock": 0,
+      "category": "biological_materials",
+      "behavior": "stock",
+      "quantity_mode": "continuous",
+      "mass_per_native_unit_lb": 1
     }
   }
 }
